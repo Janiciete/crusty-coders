@@ -47,7 +47,7 @@ pytest -q
 
 ## 5. Data contracts
 **Edge attributes (§8.1, produced by build_graph.py — do not rename):**
-length_ft · kind (sidewalk / crosswalk / snap / door approach / inferred; exact strings [VERIFY]) · travel (preferred, preferred_candidate, stair, steep, service_route, other, unlabeled, needs_check) · is_stairs · steps · landings · rail_side · slope_pct · slope_source (cornell_survey | usgs_lidar_1m_estimate; value for "unknown" <20 ft segments [VERIFY]) · cross_slope_pct · width_ft · surface · defect_level (0–3) · ramp · handrail · curb_cuts (0/1/2, crosswalks) · surveyed · date_surveyed (YYYY-MM-DD) · lit_fixtures · lit_per_100ft · lit_watts (47% filled; don't score on it) · inferred · verified · flags
+length_ft · kind (sidewalk / crosswalk / snap / door approach / inferred — confirmed exact strings, lowercase, space not underscore in "door approach") · travel (preferred, preferred_candidate, stair, steep, service_route, other, unlabeled, needs_check) · is_stairs · steps · landings · rail_side · slope_pct · slope_source (cornell_survey | usgs_lidar_1m_estimate | unknown — confirmed: "unknown" is used for every unsurveyed edge until P2's --elevation/lidar fill runs, not only segments <20 ft; after P2 runs, usgs_lidar_1m_estimate should replace "unknown" on segments ≥20 ft and "unknown" should remain only for the <20 ft case per plan §5.2) · cross_slope_pct · width_ft · surface · defect_level (0–3) · ramp · handrail · curb_cuts (0/1/2, crosswalks) · surveyed · date_surveyed (YYYY-MM-DD) · lit_fixtures · lit_per_100ft · lit_watts (47% filled; don't score on it) · inferred · verified · flags
 **Entrance node attributes:** door_id · access (accessible | not_accessible | unknown) · auto_opener · threshold_ok · clear_width_in · access_control (open | card | key) · building. `unknown` is never treated as accessible.
 
 **Preferences JSON (§7.2), stored in `profiles.preferences` or on-device for guests:**
@@ -121,11 +121,11 @@ Other endpoints: `GET /health`, `GET /profiles` (defaults), `GET /conditions`, `
 
 ## 9. Status
 - [x] P0 Repo skeleton and smoke test
-- [ ] P1 Run pipeline on real data (no --elevation) — Must
+- [x] P1 Run pipeline on real data (no --elevation) — Must
 - [ ] P2 Lidar slope fill + build validation — Must (cuttable)
-- [ ] P3 Routing core on fixture graph — Must
+- [x] P3 Routing core on fixture graph — Must
 - [ ] P4 Route API, stats, explanations, entrance destinations — Must
-- [ ] P5 Supabase schema, RLS, triggers, Realtime — Must
+- [x] P5 Supabase schema, RLS, triggers, Realtime — Must (migrations written; not yet applied to a live project — human checkpoint pending)
 - [ ] P6 Live reports in routing + seed report loader — Must (seed: Should)
 - [ ] P7 Weather and darkness conditions — Should
 - [ ] P8 Bottleneck finder — Should
@@ -134,11 +134,15 @@ Other endpoints: `GET /health`, `GET /profiles` (defaults), `GET /conditions`, `
 - [ ] P11 Honest Devpost write-up — Must
 
 **Known issues** (append; mark resolved with date/time)
-- build_graph.py tested only on synthetic data; first real run may fail.
-- Pipeline scripts not yet in repo (latest versions are in the planning chat).
 - Graph outputs are gitignored; teammates must share graph.pkl out of band or rebuild.
 - NWS requires a User-Agent header; requests fail without it.
 - Libe Slope may leave no strict Wheelchair route for the demo trip; check at the P4 checkpoint.
 - Deleting the auth user itself needs the admin API; `delete_my_data()` removes profile and saved places only.
 - Report inserts can't prove independence (no user id by design); acceptable for the demo, disclose in Devpost.
 - Resolved 00:05: preference keys extended (§5); missing plan values set as team defaults (§6).
+- Resolved 01:30 (P1): fetch_cornell_data.py and build_graph.py written and run on real demo-zone data (no --elevation). graph.pkl: MultiGraph, 4070 nodes, 6092 edges, largest component 95.2% of length (plan ~97%, ≥90% required — passes). Accessible entrances 326 (plan 354, within 300–400 band). Crosswalks in zone 119 (exact match). Stair retagging (718) and slope>5%/8.33% edge counts (323/101) run higher than the plan's per-segment figures (107 / 209 / 73) because (a) touch-point splitting turns one physical segment into several edges that each inherit the same attributes, and (b) the stair safety retag check was deliberately widened to cover every edge kind, not just sidewalks, since the "no edge on a stair polygon has is_stairs=False" requirement is unqualified by kind — see pipeline/build_graph.py. graph.pkl is gitignored; share out of band per above.
+- NEW (P1): slope_source is "unknown" (not usgs_lidar_1m_estimate) for all unsurveyed edges until P2 (--elevation) runs; routing/cost logic should treat "unknown" as the unverified-penalty case, same as it will treat the <20 ft case post-P2.
+- NEW (P1): 10 entrances (of 675 kept after dropping exit-only/sealed) are >100 ft from the path network and remain unattached (0 edges) in graph.pkl; not routable. Worth checking for the demo route.
+- NEW (P1): graph.pkl is a MultiGraph (not a simple Graph) — routing code must iterate edges with `G.edges(keys=True, data=True)` since multiple edges can exist between the same node pair (e.g. parallel short stair-tread segments).
+- Resolved 02:45 (P3, routing core): built against a hand-built fixture graph (tests/conftest.py); 20 tests pass (`pytest -q tests/test_routing.py`). Graph-specific details (edge `kind` strings, surface values, Graph-vs-MultiGraph) are isolated in service/profiles.py and service/router.py's top blocks, marked [VERIFY after P1] — now that P1 has landed, these should be reconciled against the real `kind`/`slope_source` values confirmed above and the confirmed MultiGraph output. Penalty weights live in service/profiles.py:PENALTY_WEIGHTS. distance_tolerance is resolved into preferences but not yet enforced by router.py — open question for P4. Human checkpoint still needed: compare PROFILE_PRESETS against plan §8.3 line by line before commit.
+- Resolved 02:45 (P5, Supabase): migrations written (supabase/migrations/0001-0004.sql) covering profiles/saved_places/reports/report_confirmations, RLS on all four tables, location-rounding + expiry + confirmation triggers, active_reports view, Realtime publication on reports, and delete_my_data(). Not yet pasted into a live Supabase project — human must apply via supabase/README.md, verify RLS/Realtime in the dashboard, fill .env, and rerun `pytest -q tests/test_supabase_integration.py`. [VERIFY] auth.role() inside the before-insert trigger correctly distinguishes service_role (seed) from anon/authenticated (user) inserts — confirm once the integration test runs live.
