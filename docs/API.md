@@ -31,14 +31,29 @@ Computes up to `alternatives` routes from an origin to a destination, personaliz
 |---|---|---|---|
 | `origin` | object | yes | Either `{"building": "<name>"}` or `{"lat": <float>, "lon": <float>}`. Exactly one form; both or neither is a 422. |
 | `destination` | object | yes | Same shape as `origin`. |
-| `profiles` | string[] | yes | One or more of `wheelchair`, `injured`, `low_vision`, `night_walk`, `fastest`. Combining rules: union of hard limits, max of each penalty, slowest walking speed (CLAUDE.md §6). |
+| `profiles` | string[] | no | One or more of `wheelchair`, `injured`, `low_vision`, `night_walk`, `fastest`. Combining rules: union of hard limits, max of each penalty, slowest walking speed (CLAUDE.md §6). Default: `["fastest"]` when omitted/empty (so a `priorities`-only request still resolves). |
 | `preferences` | object | no | Overrides for any key in CLAUDE.md §5's preferences JSON (`avoid_stairs`, `max_slope_pct`, `max_cross_slope_pct`, `min_width_ft`, `prefer_lit`, `surface_sensitivity`, `distance_tolerance`, `require_curb_cuts`, `require_accessible_entrance`, `ramp_required_above_pct`). Unknown keys are a 422. |
+| `priorities` | object | no | `{chip_id: "essential"\|"important"\|"nice"}` -- see "Priorities (preference chips)" below. Unknown chip ids or levels are a 422. Applied on top of `profiles`/`preferences`, so it can only add restrictions, never loosen them. |
 | `adjustments` | string[] | no | Any of `in_a_hurry`, `carrying_items`, `walking_alone`. Unknown values are a 422. |
 | `conditions` | object | no | `{"darkness": "auto"\|"on"\|"off", "ice": "auto"\|"on"\|"off"}`. Defaults to `"auto"` for both (currently resolves to `false`/`false` until Prompt 7 wires in NWS + astral). |
 | `alternatives` | int | no | Default 3. Clamped to at least 1. |
 | `include_seed_reports` | bool | no | Default `true`. When `false`, reports with `source == "seed"` (the historical Cornell trip-hazard seed data) are filtered out **before** matching reports to edges, so seed reports never affect routing or `reports_avoided` for that request. |
 
 A location given as a building name is matched case-insensitively: an exact match wins; otherwise a unique substring match is used; if several buildings match, the request is rejected (422) with the candidate names listed. A location given as a point is snapped to the nearest graph node; if that node is more than 100 m away, the request is rejected (422).
+
+### Priorities (preference chips)
+
+F1 (P13-lite): the UI's five preference chips, each with an importance level. `"essential"` is a hard limit wherever one exists (the route will never use a blocked edge, same as the equivalent `preferences` override); `"important"`/`"nice"` instead scale that penalty term in the routing cost, so the route avoids it where reasonably possible without being forbidden from using it.
+
+| Chip id | Essential | Important | Nice |
+|---|---|---|---|
+| `avoid_stairs` | `avoid_stairs = true` (hard) | stair cost ×3 | stair cost ×1.5 |
+| `avoid_steep` | `max_slope_pct = 8.33`, `ramp_required_above_pct = 5.0` (hard; the estimated-slope guard, CLAUDE.md §6/P4-fix2, still applies) | slope penalty ×3 | slope penalty ×1.5 |
+| `curb_cuts` | `require_curb_cuts = true` (hard) | curb-cut penalty ×3 | curb-cut penalty ×1.5 |
+| `accessible_entrance` | `require_accessible_entrance = true` (hard) | no routing-cost effect -- destination entrances are already preferred accessible-first by default | same as important |
+| `well_lit` | `prefer_lit = true` + lighting penalty ×5. Can't be a true hard limit (there's no per-edge "is lit" cutoff), so the response's top-level `warnings` includes a note explaining this whenever `well_lit` is `"essential"`. | `prefer_lit = true` + lighting penalty ×3 | `prefer_lit = true` + lighting penalty ×1.5 |
+
+A request with no `profiles` and no `priorities` behaves exactly like `profiles: ["fastest"]`. The map Layers feature (a separate `/layers` endpoint showing e.g. lighting/slope overlays) was cut for time; there is no such endpoint.
 
 ### Response body
 

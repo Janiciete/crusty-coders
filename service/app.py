@@ -78,8 +78,13 @@ class LocationIn(BaseModel):
 class RouteRequest(BaseModel):
     origin: LocationIn
     destination: LocationIn
-    profiles: list[str]
+    # F1 (P13-lite): profiles is no longer required -- a priorities-only
+    # request (no named profile) defaults to "fastest" in resolve_preferences.
+    profiles: list[str] = Field(default_factory=list)
     preferences: dict | None = None
+    # F1 (P13-lite): {chip_id: "essential"|"important"|"nice"} -- see
+    # docs/API.md for the chip table.
+    priorities: dict | None = None
     adjustments: list[str] = Field(default_factory=list)
     conditions: dict | None = None
     alternatives: int = 3
@@ -290,12 +295,21 @@ def bottlenecks_endpoint():
 @app.post("/route")
 def route_endpoint(req: RouteRequest, store: GraphStore = Depends(get_store)):
     try:
-        prefs = resolve_preferences(req.profiles, req.preferences, req.adjustments)
+        prefs = resolve_preferences(req.profiles, req.preferences, req.adjustments, req.priorities)
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
 
     conditions = get_conditions(req.conditions or {})
     warnings: list[str] = list(conditions.warnings)
+
+    # F1 (P13-lite): "well_lit" at "essential" can't be a hard limit (no
+    # per-edge "is lit" cutoff exists) -- resolve_preferences instead applies
+    # the heaviest lighting penalty scale; surface that tradeoff here.
+    if req.priorities and req.priorities.get("well_lit") == "essential":
+        warnings.append(
+            "Well-lit paths can't be guaranteed as a hard requirement; "
+            "routing with the strongest preference for lit paths instead."
+        )
 
     # --- reports: seed filtering (task 4), then edge effects (task 5) ---
     active_reports = get_active_reports()

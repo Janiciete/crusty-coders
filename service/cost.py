@@ -86,6 +86,7 @@ def edge_cost(
         return None
 
     length = attrs.get("length_ft", 0.0)
+    penalty_scale = prefs.penalty_scale or {}
 
     # --- slope ---
     slope = attrs.get("slope_pct") or 0.0
@@ -99,6 +100,8 @@ def edge_cost(
         )
     else:
         slope_penalty = PENALTY_WEIGHTS["unknown_slope_flat"]
+    # F1 (P13-lite): "avoid_steep" priority chip at important/nice.
+    slope_penalty *= penalty_scale.get("slope", 1.0)
 
     # --- cross slope ---
     cross = attrs.get("cross_slope_pct") or 0.0
@@ -111,9 +114,13 @@ def edge_cost(
         surface_penalty += PENALTY_WEIGHTS["surface_rough"] * prefs.surface_sensitivity
 
     # --- curb cuts (crosswalks); only a penalty when not hard-blocking ---
+    # Kept separate from surface_penalty (unlike pre-F1) so it can be scaled
+    # on its own by the "curb_cuts" priority chip at important/nice.
+    curb_cut_penalty = 0.0
     curb_cuts = attrs.get("curb_cuts")
     if curb_cuts is not None and curb_cuts < 2 and not prefs.require_curb_cuts:
-        surface_penalty += PENALTY_WEIGHTS["curb_cut_missing"] * (2 - curb_cuts)
+        curb_cut_penalty = PENALTY_WEIGHTS["curb_cut_missing"] * (2 - curb_cuts)
+        curb_cut_penalty *= penalty_scale.get("curb_cuts", 1.0)
 
     # --- missing handrail on a steep surveyed segment (injured) ---
     if (
@@ -135,6 +142,9 @@ def edge_cost(
     is_dark = lit is not None and lit <= dark_threshold
     if is_dark and (prefs.prefer_lit or conditions.darkness):
         lighting_penalty = PENALTY_WEIGHTS["lighting_dark"] * prefs.dark_penalty_multiplier
+        # F1 (P13-lite): "well_lit" priority chip (x5 essential, x3/x1.5
+        # important/nice -- essential can't be a hard limit, see app.py).
+        lighting_penalty *= penalty_scale.get("lighting", 1.0)
 
     # --- condition multipliers ---
     if conditions.ice:
@@ -145,6 +155,7 @@ def edge_cost(
         slope_penalty
         + cross_penalty
         + surface_penalty
+        + curb_cut_penalty
         + lighting_penalty
         + unverified_penalty
     )
@@ -158,6 +169,10 @@ def edge_cost(
     # --- carrying_items: doubles stair cost where stairs are still allowed ---
     if prefs.carrying_items and attrs.get("is_stairs"):
         cost *= PENALTY_WEIGHTS["carrying_items_stair_multiplier"]
+
+    # --- F1 (P13-lite): "avoid_stairs" priority chip at important/nice ---
+    if attrs.get("is_stairs"):
+        cost *= penalty_scale.get("stairs", 1.0)
 
     return cost
 

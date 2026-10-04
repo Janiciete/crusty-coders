@@ -89,6 +89,17 @@ OVERRIDABLE_PREFERENCE_KEYS = {
 
 KNOWN_ADJUSTMENTS = {"in_a_hurry", "carrying_items", "walking_alone"}
 
+# F1 (P13-lite): preference-chip ids and importance levels a caller may
+# send via POST /route "priorities" (not yet part of CLAUDE.md §5's
+# preferences JSON -- see docs/API.md for the table this encodes).
+PRIORITY_CHIP_IDS = {"avoid_stairs", "avoid_steep", "curb_cuts", "accessible_entrance", "well_lit"}
+PRIORITY_LEVELS = {"essential", "important", "nice"}
+
+# Penalty-scale multiplier applied per chip at "important"/"nice" (CLAUDE.md
+# Known issues, F1); well_lit's "essential" case is handled separately
+# (resolve_preferences) since it uses x5, not x3/x1.5.
+_PRIORITY_SCALE_BY_LEVEL = {"important": 3.0, "nice": 1.5}
+
 
 @dataclass
 class ResolvedPrefs:
@@ -108,6 +119,12 @@ class ResolvedPrefs:
     penalize_missing_handrail: bool = False
     carrying_items: bool = False
     profiles: tuple = field(default_factory=tuple)
+    # F1 (P13-lite): per-penalty-term multipliers from "important"/"nice"
+    # priority chips (CLAUDE.md Known issues). Keys: "stairs", "slope",
+    # "curb_cuts", "lighting". Empty by default, so edge_cost()'s
+    # `.get(key, 1.0)` lookups are a no-op and every pre-F1 test is
+    # unaffected.
+    penalty_scale: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -237,15 +254,23 @@ def resolve_preferences(
     profiles: list[str],
     overrides: dict | None,
     adjustments: list[str],
+    priorities: dict | None = None,
 ) -> ResolvedPrefs:
     """Combine one or more profile presets, apply overrides and adjustments.
 
     Combining rules (CLAUDE.md §6): union of hard limits, max of each
     penalty, slowest walking speed. Unknown profile names, unknown
     adjustment names, or unknown preference override keys raise ValueError.
+
+    F1 (P13-lite) `priorities`: {chip_id: "essential"|"important"|"nice"}.
+    When `profiles` is empty/missing, defaults to `["fastest"]` so a
+    priorities-only request still resolves. Applied *after* profiles and
+    `overrides` (same layering as `overrides`, so it can only add
+    restrictions on top of whatever the profiles/overrides already set, not
+    loosen them). Unknown chip ids or levels raise ValueError (-> 422).
     """
     if not profiles:
-        raise ValueError("at least one profile is required")
+        profiles = ["fastest"]
 
     for p in profiles:
         if p not in PROFILE_PRESETS:
@@ -260,6 +285,13 @@ def resolve_preferences(
     for k in overrides:
         if k not in OVERRIDABLE_PREFERENCE_KEYS:
             raise ValueError(f"unknown preference key: {k!r}")
+
+    priorities = priorities or {}
+    for chip_id, level in priorities.items():
+        if chip_id not in PRIORITY_CHIP_IDS:
+            raise ValueError(f"unknown priority chip id: {chip_id!r}")
+        if level not in PRIORITY_LEVELS:
+            raise ValueError(f"unknown priority level: {level!r}")
 
     result = ResolvedPrefs(
         avoid_stairs=False,
@@ -313,6 +345,37 @@ def resolve_preferences(
 
     for key, value in overrides.items():
         setattr(result, key, value)
+
+    for chip_id, level in priorities.items():
+        if chip_id == "avoid_stairs":
+            if level == "essential":
+                result.avoid_stairs = True
+            else:
+                result.penalty_scale["stairs"] = _PRIORITY_SCALE_BY_LEVEL[level]
+        elif chip_id == "avoid_steep":
+            if level == "essential":
+                result.max_slope_pct = min(result.max_slope_pct, 8.33)
+                result.ramp_required_above_pct = min(result.ramp_required_above_pct, 5.0)
+            else:
+                result.penalty_scale["slope"] = _PRIORITY_SCALE_BY_LEVEL[level]
+        elif chip_id == "curb_cuts":
+            if level == "essential":
+                result.require_curb_cuts = True
+            else:
+                result.penalty_scale["curb_cuts"] = _PRIORITY_SCALE_BY_LEVEL[level]
+        elif chip_id == "accessible_entrance":
+            if level == "essential":
+                result.require_accessible_entrance = True
+            # "important"/"nice": no-op here -- app.py's destination-entrance
+            # filter already prefers accessible entrances by default.
+        elif chip_id == "well_lit":
+            result.prefer_lit = True
+            if level != "essential":
+                result.penalty_scale["lighting"] = _PRIORITY_SCALE_BY_LEVEL[level]
+            else:
+                result.penalty_scale["lighting"] = 5.0
+            # "essential" can't be a hard limit (no per-edge "is lit" cutoff
+            # exists); app.py adds a warning explaining this.
 
     if "in_a_hurry" in adjustments:
         result.distance_tolerance = min(result.distance_tolerance, 1.1)
