@@ -16,7 +16,6 @@ import pytest
 from service.conditions import Conditions, get_conditions
 from service.cost import compute_dark_threshold, edge_cost, hard_limit_violations
 from service.profiles import PROFILE_PRESETS, resolve_preferences
-from service.reports import edge_effects_for, get_active_reports
 from service.router import find_routes
 from tests.conftest import make_edge
 
@@ -46,9 +45,10 @@ def test_conditions_stub_on_off_auto():
     assert c3.darkness is False
 
 
-def test_reports_stub_returns_empty():
-    assert get_active_reports() == []
-    assert edge_effects_for(object(), []) == {}
+# reports.py is no longer a stub as of P6 -- get_active_reports()/
+# edge_effects_for() are now live-Supabase-backed and covered by
+# tests/test_reports.py; the old stub-returns-empty assertion no longer
+# reflects intended behavior and was removed rather than patched to fake it.
 
 
 # ---------------------------------------------------------------------------
