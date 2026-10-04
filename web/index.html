@@ -4,211 +4,195 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Way2Go — Navigate campus your way.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin="" />
-<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="css/styles.css" />
+<link rel="stylesheet" href="css/auth.css" />
+<link rel="stylesheet" href="css/live.css" />
+<link rel="stylesheet" href="css/ai.css" />
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <a class="skip-link" href="#panel">Skip to route planner</a>
 
-  <header class="site-header">
-    <div class="brand">
-      <span class="brand-name">Way2Go</span>
-      <span class="tagline">Navigate campus your way.</span>
-    </div>
-    <div class="text-size-control" role="group" aria-label="Text size">
-      <button type="button" id="font-decrease" aria-label="Decrease text size">A−</button>
-      <button type="button" id="font-increase" aria-label="Increase text size">A+</button>
-    </div>
-  </header>
+  <div id="map" aria-label="Campus map"></div>
 
-  <main id="main-content">
-    <section class="panel" aria-labelledby="destination-heading">
-      <h1 id="destination-heading">Where are you going?</h1>
-      <div class="field">
-        <label for="destination-input">Destination</label>
-        <input
-          id="destination-input"
-          type="text"
-          list="buildings-list"
-          autocomplete="off"
-          placeholder="Search for a building…"
-        />
-        <datalist id="buildings-list"></datalist>
-      </div>
+  <div class="top-bar">
+    <div id="auth-slot"></div>
+  </div>
 
-      <div class="field origin-field">
-        <label for="origin-input">From</label>
-        <div class="origin-row">
-          <input
-            id="origin-input"
-            type="text"
-            list="buildings-list"
-            autocomplete="off"
-            placeholder="Current location"
-            disabled
-          />
-          <button type="button" id="origin-change-btn" class="link-button">
-            Use a building instead
-          </button>
-        </div>
-        <p id="geolocation-note" class="supporting-text" hidden>
-          We'll use your current location for this route only. It's never stored.
-        </p>
-      </div>
-
-      <h2 id="priorities-heading">How should we get you there?</h2>
-      <p class="supporting-text">
-        Choose what matters to you. We'll build a route around your preferences.
-      </p>
-
-      <div class="chip-grid" role="group" aria-labelledby="priorities-heading">
-        <div class="chip-card" data-chip="avoid_stairs">
-          <button type="button" class="chip-toggle" aria-pressed="false">
-            <span class="chip-icon" aria-hidden="true">♿</span>
-            <span class="chip-label">Avoid stairs</span>
-            <span class="chip-check" aria-hidden="true">✓</span>
-          </button>
-          <fieldset class="importance-group" hidden>
-            <legend>How important is this?</legend>
-            <label><input type="radio" name="importance-avoid_stairs" value="essential" checked /> Essential</label>
-            <label><input type="radio" name="importance-avoid_stairs" value="important" /> Important</label>
-            <label><input type="radio" name="importance-avoid_stairs" value="nice_to_have" /> Nice to have</label>
-          </fieldset>
-        </div>
-
-        <div class="chip-card" data-chip="avoid_steep">
-          <button type="button" class="chip-toggle" aria-pressed="false">
-            <span class="chip-icon" aria-hidden="true">↗</span>
-            <span class="chip-label">Avoid steep slopes</span>
-            <span class="chip-check" aria-hidden="true">✓</span>
-          </button>
-          <fieldset class="importance-group" hidden>
-            <legend>How important is this?</legend>
-            <label><input type="radio" name="importance-avoid_steep" value="essential" checked /> Essential</label>
-            <label><input type="radio" name="importance-avoid_steep" value="important" /> Important</label>
-            <label><input type="radio" name="importance-avoid_steep" value="nice_to_have" /> Nice to have</label>
-          </fieldset>
-        </div>
-
-        <div class="chip-card" data-chip="curb_cuts">
-          <button type="button" class="chip-toggle" aria-pressed="false">
-            <span class="chip-icon" aria-hidden="true">⬇</span>
-            <span class="chip-label">Curb cuts at crossings</span>
-            <span class="chip-check" aria-hidden="true">✓</span>
-          </button>
-          <fieldset class="importance-group" hidden>
-            <legend>How important is this?</legend>
-            <label><input type="radio" name="importance-curb_cuts" value="essential" checked /> Essential</label>
-            <label><input type="radio" name="importance-curb_cuts" value="important" /> Important</label>
-            <label><input type="radio" name="importance-curb_cuts" value="nice_to_have" /> Nice to have</label>
-          </fieldset>
-        </div>
-
-        <div class="chip-card" data-chip="accessible_entrance">
-          <button type="button" class="chip-toggle" aria-pressed="false">
-            <span class="chip-icon" aria-hidden="true">🚪</span>
-            <span class="chip-label">Prioritize accessible entrances</span>
-            <span class="chip-check" aria-hidden="true">✓</span>
-          </button>
-          <fieldset class="importance-group" hidden>
-            <legend>How important is this?</legend>
-            <label><input type="radio" name="importance-accessible_entrance" value="essential" checked /> Essential</label>
-            <label><input type="radio" name="importance-accessible_entrance" value="important" /> Important</label>
-            <label><input type="radio" name="importance-accessible_entrance" value="nice_to_have" /> Nice to have</label>
-          </fieldset>
-        </div>
-
-        <div class="chip-card" data-chip="well_lit">
-          <button type="button" class="chip-toggle" aria-pressed="false">
-            <span class="chip-icon" aria-hidden="true">💡</span>
-            <span class="chip-label">Prefer well-lit paths</span>
-            <span class="chip-check" aria-hidden="true">✓</span>
-          </button>
-          <fieldset class="importance-group" hidden>
-            <legend>How important is this?</legend>
-            <label><input type="radio" name="importance-well_lit" value="essential" checked /> Essential</label>
-            <label><input type="radio" name="importance-well_lit" value="important" /> Important</label>
-            <label><input type="radio" name="importance-well_lit" value="nice_to_have" /> Nice to have</label>
-          </fieldset>
-        </div>
-      </div>
-
-      <button type="button" id="find-route-btn" class="primary-button" disabled>
-        Find My Route →
+  <main id="panel" class="panel" aria-label="Route planner">
+    <div class="sheet-handle-row">
+      <button type="button" class="sheet-handle" id="sheet-expand-btn" aria-label="Resize panel">
+        <span class="sheet-handle-grip" aria-hidden="true"></span>
       </button>
-    </section>
+    </div>
 
-    <div id="aria-live-region" class="visually-hidden" aria-live="polite"></div>
+    <div class="step-progress" id="step-progress" aria-hidden="true" hidden>
+      <span class="progress-dot" data-step="1"></span>
+      <span class="progress-dot" data-step="2"></span>
+      <span class="progress-dot" data-step="3"></span>
+      <span class="progress-dot" data-step="4"></span>
+    </div>
 
-    <section class="results" aria-labelledby="results-heading" hidden>
-      <h2 id="results-heading" class="visually-hidden">Route results</h2>
+    <div id="step-content"></div>
 
-      <div id="loading-state" class="loading-state" hidden>
-        <span class="spinner" aria-hidden="true"></span>
-        <p>Finding a route that works for you…</p>
+    <div class="panel-footer">
+      <div class="text-size-control" role="group" aria-label="Text size">
+        <button type="button" id="font-decrease" aria-label="Decrease text size">A&minus;</button>
+        <button type="button" id="font-increase" aria-label="Increase text size">A+</button>
       </div>
-
-      <div id="error-state" class="error-state" hidden>
-        <p>We couldn't find that location.</p>
-        <button type="button" id="search-again-btn" class="secondary-button">Search again</button>
-      </div>
-
-      <div id="result-state" hidden>
-        <div id="no-perfect-route-banner" class="banner" hidden>
-          <p><strong>We couldn't find a route that meets every preference.</strong></p>
-          <ul id="compromise-list"></ul>
-        </div>
-
-        <div id="map" aria-label="Route map"></div>
-
-        <div class="summary-card" id="summary-card">
-          <dl class="summary-stats"></dl>
-        </div>
-
-        <div class="why-card">
-          <h3>Why this route?</h3>
-          <ul id="explanation-list-short"></ul>
-          <button type="button" id="show-details-btn" class="link-button" aria-expanded="false">
-            Show details
-          </button>
-          <div id="explanation-details" hidden>
-            <ul id="explanation-list-full"></ul>
-            <h4>Segments</h4>
-            <ul id="segment-list"></ul>
-          </div>
-        </div>
-
-        <div class="compare-row" role="group" aria-label="Compare routes">
-          <button type="button" class="compare-card" data-route-key="recommended" aria-pressed="true">
-            <span class="compare-icon" aria-hidden="true">⭐</span>
-            <span class="compare-title">Recommended</span>
-            <dl class="compare-stats"></dl>
-          </button>
-          <button type="button" class="compare-card" data-route-key="fastest" aria-pressed="false">
-            <span class="compare-icon" aria-hidden="true">⚡</span>
-            <span class="compare-title">Fastest</span>
-            <dl class="compare-stats"></dl>
-          </button>
-          <button type="button" class="compare-card" data-route-key="stepfree" aria-pressed="false">
-            <span class="compare-icon" aria-hidden="true">♿</span>
-            <span class="compare-title">Step-free</span>
-            <dl class="compare-stats"></dl>
-          </button>
-        </div>
-      </div>
-    </section>
+    </div>
   </main>
 
-  <footer class="site-footer">
-    <p>Routes are guidance, not ADA certification.</p>
-  </footer>
+  <div id="aria-live-region" class="visually-hidden" aria-live="polite"></div>
+  <datalist id="buildings-list"></datalist>
+
+  <div class="attribution-bar">
+    <span>Routes are guidance, not ADA certification.</span>
+  </div>
+
+  <div id="report-sheet" hidden></div>
+  <div id="auth-dialog" hidden></div>
+  <div id="facilities-panel" hidden></div>
+
+  <template id="tpl-step-destination">
+    <h1 class="step-question">Where to?</h1>
+    <div class="field">
+      <label for="destination-input" class="visually-hidden">Destination building</label>
+      <input
+        id="destination-input"
+        class="search-input"
+        type="text"
+        list="buildings-list"
+        autocomplete="off"
+        placeholder="Search for a building…"
+      />
+      <p class="field-hint" id="destination-hint" role="status"></p>
+    </div>
+  </template>
+
+  <template id="tpl-step-origin">
+    <h1 class="step-question">Starting from</h1>
+    <div class="origin-choice" role="group" aria-label="Starting point">
+      <button type="button" class="choice-button" id="origin-use-location">Use my location</button>
+      <button type="button" class="choice-button" id="origin-use-building">Choose a building</button>
+    </div>
+    <p class="field-hint" id="geolocation-note" hidden>Used for this route only. Never saved.</p>
+    <div class="field" id="origin-building-field" hidden>
+      <label for="origin-input" class="visually-hidden">Starting building</label>
+      <input
+        id="origin-input"
+        class="search-input"
+        type="text"
+        list="buildings-list"
+        autocomplete="off"
+        placeholder="Search for a building…"
+      />
+    </div>
+    <p class="field-hint" id="origin-error" role="alert" hidden></p>
+  </template>
+
+  <template id="tpl-step-chips">
+    <h1 class="step-question">Anything we should avoid?</h1>
+    <button type="button" class="link-button" id="use-usual-prefs" hidden>Use my usual preferences</button>
+    <div id="ai-slot" hidden></div>
+    <div class="chip-grid" role="group" aria-label="Accessibility preferences">
+      <button type="button" class="pill-chip" data-chip="avoid_stairs" aria-pressed="false">
+        <span aria-hidden="true">♿</span> Avoid stairs <span class="chip-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="pill-chip" data-chip="avoid_steep" aria-pressed="false">
+        <span aria-hidden="true">↗</span> Avoid steep slopes <span class="chip-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="pill-chip" data-chip="curb_cuts" aria-pressed="false">
+        <span aria-hidden="true">⬇</span> Curb cuts at crossings <span class="chip-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="pill-chip" data-chip="accessible_entrance" aria-pressed="false">
+        <span aria-hidden="true">🚪</span> Accessible entrances <span class="chip-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="pill-chip" data-chip="well_lit" aria-pressed="false">
+        <span aria-hidden="true">💡</span> Well-lit paths <span class="chip-check" aria-hidden="true">✓</span>
+      </button>
+    </div>
+  </template>
+
+  <template id="tpl-step-importance">
+    <h1 class="step-question">How much does each one matter?</h1>
+    <div id="importance-list"></div>
+  </template>
+
+  <template id="tpl-importance-row">
+    <div class="importance-row">
+      <p class="importance-chip-label"></p>
+      <div class="segmented-control" role="radiogroup">
+        <label class="segment"><input type="radio" value="essential" /> Essential</label>
+        <label class="segment"><input type="radio" value="important" /> Important</label>
+        <label class="segment"><input type="radio" value="nice" /> Nice to have</label>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-loading">
+    <div class="loading-state">
+      <span class="spinner" aria-hidden="true"></span>
+      <p>Finding a route that works for you</p>
+    </div>
+  </template>
+
+  <template id="tpl-error">
+    <div class="error-state">
+      <p id="error-message"></p>
+      <button type="button" class="choice-button" id="error-retry-btn">Try again</button>
+    </div>
+  </template>
+
+  <template id="tpl-results">
+    <div id="no-perfect-route-banner" class="banner" hidden>
+      <p><strong>We couldn't find a route that meets every preference.</strong></p>
+      <ul id="compromise-list"></ul>
+    </div>
+
+    <h1 class="step-question">Recommended for you</h1>
+    <div class="headline-stat">
+      <span class="headline-number" id="headline-minutes"></span>
+      <span class="headline-label">min &middot; <span id="headline-distance"></span></span>
+    </div>
+
+    <dl class="stat-grid" id="summary-stats"></dl>
+
+    <div id="conditions-slot" hidden></div>
+
+    <div class="why-card">
+      <h2>Why this route?</h2>
+      <ul id="explanation-list-short"></ul>
+      <button type="button" class="link-button" id="show-details-btn" aria-expanded="false">More details</button>
+      <div id="explanation-details" hidden>
+        <ul id="explanation-list-full"></ul>
+        <h3>Segments</h3>
+        <ul id="segment-list"></ul>
+      </div>
+    </div>
+
+    <div class="segmented-control compare-control" role="radiogroup" aria-label="Compare routes" id="compare-control">
+      <label class="segment"><input type="radio" name="compare" value="recommended" checked /> Recommended</label>
+      <label class="segment"><input type="radio" name="compare" value="fastest" /> Fastest</label>
+      <label class="segment"><input type="radio" name="compare" value="stepfree" /> Step-free</label>
+    </div>
+    <dl class="compare-stats" id="compare-stats"></dl>
+
+    <div class="results-actions">
+      <button type="button" class="choice-button" id="edit-preferences-btn">Edit preferences</button>
+      <button type="button" class="choice-button" id="new-destination-btn">New destination</button>
+    </div>
+  </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin=""></script>
   <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
