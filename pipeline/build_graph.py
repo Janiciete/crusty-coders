@@ -3,8 +3,9 @@
 Implements plan §5.2 in order: clip to the demo zone, normalize travel
 labels, add crosswalks, snap/split/bridge the sidewalk network, match
 stairs to polygons (and safety re-tag unlabeled stairs), convert dates,
-flag suspect slopes, process entrances/door approaches, and attach
-lighting density per edge.
+flag suspect slopes, process entrances/door approaches, fill unsurveyed
+slopes from USGS lidar (--elevation, P2), and attach lighting density
+per edge.
 
 Outputs (CLAUDE.md §3), written under cornell_data/graph/:
     edges.geojson  nodes.geojson  graph.pkl  seed_reports.geojson  build_report.txt
@@ -12,12 +13,15 @@ Outputs (CLAUDE.md §3), written under cornell_data/graph/:
 Usage:
     python pipeline/build_graph.py --bbox W S E N [--elevation]
 
---elevation (USGS lidar slope fill for unsurveyed segments) is P2 and
-is not implemented here; passing it prints a notice and the elevation
-step is skipped cleanly (everything else still runs).
+--elevation fills slope_pct/slope_source from USGS EPQS 1 m lidar for
+every non-stair sidewalk/crosswalk edge that has no surveyed slope and
+is >= MIN_SEG_FT, plus any edge flagged "suspect_slope". Results are
+cached on disk (cornell_data/elevation_cache.json) so reruns make no
+new network requests.
 """
 
 import argparse
+import asyncio
 import json
 import math
 import pickle
@@ -26,6 +30,7 @@ import sys
 from pathlib import Path
 
 import geopandas as gpd
+import httpx
 import networkx as nx
 import pandas as pd
 from shapely.geometry import LineString, Point, box
@@ -49,6 +54,20 @@ STAIR_RETAG_OVERLAP_FRAC = 0.1  # re-tag a non-stair segment if >= this fraction
 ENTRANCE_ATTACH_FT = 100.0   # max distance to attach an entrance to the path network
 LIGHTING_RADIUS_FT = 50.0    # fixtures within this of an edge count toward it
 SUSPECT_SLOPE_PCT = 20.0     # non-stair slope above this is flagged suspect (plan §5.2, 51% outlier)
+
+# ---- P2: USGS EPQS lidar slope fill (--elevation) ----
+EPQS_URL = "https://epqs.nationalmap.gov/v1/json"
+ELEVATION_CACHE_PATH = DATA_DIR / "elevation_cache.json"
+ELEV_COORD_PRECISION = 6     # decimal degrees (~0.11 m at this latitude); cache-key rounding,
+                              # same idea as NodeStore._key's rounded-coordinate dict keys
+ELEV_CONCURRENCY = 4         # max concurrent EPQS requests
+ELEV_TIMEOUT_S = 10.0
+ELEV_RETRIES = 2             # retries beyond the first attempt (3 attempts total)
+ELEV_USER_AGENT = "crusty-coders-pipeline/1.0"  # same convention as fetch_cornell_data.py
+EPQS_NODATA_SENTINEL = -9999.0  # USGS returns large negative values for no-data points
+OUTLIER_SLOPE_CAP_PCT = 60.0  # a lidar-estimated slope above this is treated as a bad read
+                               # (e.g. building/tree noise in the 1 m DEM), not trusted data
+M_TO_FT = 3.280839895013123
 
 TRAVEL_MAP = {
     "preferred": "preferred",
@@ -340,6 +359,191 @@ def bridge_gaps(G: nx.Graph, nodes: NodeStore):
     return added
 
 
+def _elev_cache_key(lon: float, lat: float) -> str:
+    return f"{round(lon, ELEV_COORD_PRECISION)},{round(lat, ELEV_COORD_PRECISION)}"
+
+
+def load_elevation_cache() -> dict:
+    if ELEVATION_CACHE_PATH.exists():
+        try:
+            with open(ELEVATION_CACHE_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_elevation_cache(cache: dict) -> None:
+    with open(ELEVATION_CACHE_PATH, "w") as f:
+        json.dump(cache, f)
+
+
+async def _fetch_one_elevation(client: "httpx.AsyncClient", sem: "asyncio.Semaphore",
+                                lon: float, lat: float):
+    """Single EPQS lookup with retry/backoff (same convention as
+    fetch_cornell_data.py's _get_json: explicit User-Agent, 1.5*(attempt+1)s
+    backoff). Returns elevation in meters, or None on permanent failure /
+    USGS no-data sentinel."""
+    params = {"x": lon, "y": lat, "units": "Meters", "output": "json"}
+    headers = {"User-Agent": ELEV_USER_AGENT}
+    async with sem:
+        for attempt in range(ELEV_RETRIES + 1):
+            try:
+                r = await client.get(EPQS_URL, params=params, timeout=ELEV_TIMEOUT_S, headers=headers)
+                r.raise_for_status()
+                data = r.json()
+                val = float(data["value"])
+                if val <= EPQS_NODATA_SENTINEL:
+                    return None  # valid HTTP response, but USGS has no data here; not retryable
+                return val
+            except Exception:
+                if attempt < ELEV_RETRIES:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        return None
+
+
+async def _fetch_elevation_batch(targets: dict) -> dict:
+    """targets: cache_key -> (lon, lat). Returns cache_key -> elevation (float or None),
+    using at most ELEV_CONCURRENCY concurrent requests."""
+    sem = asyncio.Semaphore(ELEV_CONCURRENCY)
+    results = {}
+
+    async def worker(key, lon, lat):
+        results[key] = await _fetch_one_elevation(client, sem, lon, lat)
+
+    async with httpx.AsyncClient() as client:
+        await asyncio.gather(*(worker(k, lon, lat) for k, (lon, lat) in targets.items()))
+    return results
+
+
+def is_elevation_candidate(data: dict) -> bool:
+    """True for edges P2 should attempt to fill/re-measure: non-stair
+    sidewalk/crosswalk geometry that is either unsurveyed and >= MIN_SEG_FT,
+    or flagged suspect_slope (an implausible surveyed value, plan §5.2's
+    51% outlier). Synthetic edges (snap/inferred/door approach) are never
+    candidates regardless of length."""
+    if data.get("is_stairs"):
+        return False
+    if data.get("kind") not in ("sidewalk", "crosswalk"):
+        return False
+    is_suspect = "suspect_slope" in data.get("flags", [])
+    is_unknown_long = (
+        data.get("slope_source") == "unknown" and data.get("length_ft", 0.0) >= MIN_SEG_FT
+    )
+    return is_suspect or is_unknown_long
+
+
+def run_elevation_fill(G: nx.MultiGraph, log) -> None:
+    """P2: fill slope_pct/slope_source for is_elevation_candidate edges from
+    USGS EPQS 1 m lidar, caching every elevation on disk. Surveyed
+    (cornell_survey) slopes are never overwritten unless the edge is a
+    suspect_slope outlier AND a trustworthy (<= OUTLIER_SLOPE_CAP_PCT)
+    re-measurement is obtained; otherwise the original surveyed value is
+    left untouched."""
+    candidates = [(u, v, k, d) for u, v, k, d in G.edges(keys=True, data=True)
+                  if is_elevation_candidate(d)]
+    n_unknown_candidates = sum(1 for _, _, _, d in candidates if d.get("slope_source") == "unknown")
+    n_suspect_candidates = sum(1 for _, _, _, d in candidates if "suspect_slope" in d.get("flags", []))
+
+    log("\n=== Elevation fill (--elevation, USGS EPQS 1 m lidar) ===")
+    log(f"Candidate edges: {len(candidates)} "
+        f"(unsurveyed >= {MIN_SEG_FT:g} ft: {n_unknown_candidates}; "
+        f"suspect_slope outliers: {n_suspect_candidates})")
+
+    if not candidates:
+        log("No candidate edges require elevation lookups.")
+        return
+
+    needed_nodes = sorted({u for u, v, k, d in candidates} | {v for u, v, k, d in candidates})
+    pts = [Point(G.nodes[n]["x"], G.nodes[n]["y"]) for n in needed_nodes]
+    pts_wgs84 = gpd.GeoSeries(pts, crs=WORK_CRS).to_crs(WGS84)
+    node_lonlat = {n: (pt.x, pt.y) for n, pt in zip(needed_nodes, pts_wgs84)}
+
+    cache = load_elevation_cache()
+    node_key = {}
+    missing = {}  # cache_key -> (rounded_lon, rounded_lat)
+    for n, (lon, lat) in node_lonlat.items():
+        key = _elev_cache_key(lon, lat)
+        node_key[n] = key
+        if key not in cache and key not in missing:
+            rlon, rlat = (float(x) for x in key.split(","))
+            missing[key] = (rlon, rlat)
+
+    unique_keys = set(node_key.values())
+    n_cached_hits = len(unique_keys) - len(missing)
+
+    fetched = asyncio.run(_fetch_elevation_batch(missing)) if missing else {}
+    n_requests_made = len(missing)
+    n_requests_failed = sum(1 for v in fetched.values() if v is None)
+    cache.update(fetched)
+    save_elevation_cache(cache)
+
+    log(f"Unique node positions needing elevation: {len(unique_keys)}")
+    log(f"  served from cache: {n_cached_hits}")
+    log(f"  new EPQS requests: {n_requests_made} (permanently failed after retries: {n_requests_failed})")
+
+    n_filled = 0
+    n_still_unknown = 0
+    n_suspect_resolved = 0
+    n_suspect_unresolved = 0
+    n_outlier_capped = 0
+
+    for u, v, k, d in candidates:
+        is_suspect = "suspect_slope" in d.get("flags", [])
+        elev_u = cache.get(node_key[u])
+        elev_v = cache.get(node_key[v])
+        length_ft = d.get("length_ft", 0.0)
+
+        if elev_u is None or elev_v is None:
+            if is_suspect:
+                n_suspect_unresolved += 1
+            else:
+                n_still_unknown += 1
+            continue
+
+        delta_ft = abs(elev_u - elev_v) * M_TO_FT
+        slope = (delta_ft / length_ft * 100.0) if length_ft > 0 else 0.0
+
+        if slope > OUTLIER_SLOPE_CAP_PCT:
+            n_outlier_capped += 1
+            if is_suspect:
+                # keep the original surveyed value untouched; we couldn't
+                # produce a trustworthy re-measurement
+                n_suspect_unresolved += 1
+            else:
+                flags = list(d.get("flags", []))
+                if "lidar_outlier" not in flags:
+                    flags.append("lidar_outlier")
+                d["flags"] = flags
+                d["slope_pct"] = None
+                d["slope_source"] = "unknown"
+                n_still_unknown += 1
+            continue
+
+        flags = list(d.get("flags", []))
+        if "estimated_slope" not in flags:
+            flags.append("estimated_slope")
+        d["flags"] = flags
+        d["slope_pct"] = round(slope, 2)
+        d["slope_source"] = "usgs_lidar_1m_estimate"
+        d["verified"] = False  # never verified when the value is a lidar estimate
+        if is_suspect:
+            n_suspect_resolved += 1
+        else:
+            n_filled += 1
+
+    log(f"Unsurveyed edges filled from lidar: {n_filled}")
+    log(f"Unsurveyed edges still unknown (no elevation and/or outlier > {OUTLIER_SLOPE_CAP_PCT:g}%): {n_still_unknown}")
+    log(f"Suspect-slope edges re-measured and resolved: {n_suspect_resolved}")
+    log(f"Suspect-slope edges left unresolved (original surveyed value kept): {n_suspect_unresolved}")
+    log(f"Elevation cache: {ELEVATION_CACHE_PATH} ({len(cache)} total entries on disk)")
+
+    n_unknown_total = sum(1 for _, _, d in G.edges(data=True) if d.get("slope_source") == "unknown")
+    n_estimate_total = sum(1 for _, _, d in G.edges(data=True) if d.get("slope_source") == "usgs_lidar_1m_estimate")
+    log(f"Graph-wide after fill: slope_source=unknown on {n_unknown_total} edges, "
+        f"usgs_lidar_1m_estimate on {n_estimate_total} edges")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bbox", nargs=4, type=float, metavar=("W", "S", "E", "N"), required=True)
@@ -358,8 +562,6 @@ def main() -> int:
     log("=== build_graph.py ===")
     log(f"bbox (lon/lat): W={W} S={S} E={E} N={N}")
     log(f"elevation: {'requested' if args.elevation else 'not requested'}")
-    if args.elevation:
-        log("--elevation: lidar slope fill is not implemented here (P2). Skipping that step cleanly.")
 
     required = [
         "walk_inventory.geojson", "crosswalks.geojson", "entrances.geojson",
@@ -797,6 +999,10 @@ def main() -> int:
     retagged += late_retagged
     log(f"Additional segments re-tagged as stairs after entrance attachment (door approaches, etc.): {late_retagged}")
     log(f"Total non-stair segments re-tagged as stairs (true polygon overlap): {retagged}")
+
+    # ---- elevation fill (P2): USGS lidar slope estimate for unsurveyed/suspect edges ----
+    if args.elevation:
+        run_elevation_fill(G, log)
 
     # ---- lighting: fixtures within LIGHTING_RADIUS_FT of each edge ----
     if len(lighting_c):

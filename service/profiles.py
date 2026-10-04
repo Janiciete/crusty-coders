@@ -12,20 +12,35 @@ from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
 # Graph-vocabulary constants. These describe strings/values produced by
-# build_graph.py (P1, not yet run on real data). Keeping them here, in one
-# place, means P4 only has to edit this block once the real pipeline output
-# is known. [VERIFY after P1]
+# build_graph.py. Confirmed against the real P1 build (graph.pkl: MultiGraph,
+# 4070 nodes, 6092 edges) by P4 -- see CLAUDE.md Known issues (P1) for the
+# source facts. Kept in one place so later prompts only edit this block if
+# the pipeline's vocabulary ever changes.
 # ---------------------------------------------------------------------------
-KIND_SIDEWALK = "sidewalk"  # [VERIFY after P1]
-KIND_CROSSWALK = "crosswalk"  # [VERIFY after P1]
-KIND_SNAP = "snap"  # [VERIFY after P1]
-KIND_DOOR_APPROACH = "door approach"  # [VERIFY after P1]
-KIND_INFERRED = "inferred"  # [VERIFY after P1]
+KIND_SIDEWALK = "sidewalk"
+KIND_CROSSWALK = "crosswalk"
+KIND_SNAP = "snap"
+KIND_DOOR_APPROACH = "door approach"
+KIND_INFERRED = "inferred"
 
-SLOPE_SOURCE_SURVEYED = "cornell_survey"  # [VERIFY after P1]
-SLOPE_SOURCE_ESTIMATE = "usgs_lidar_1m_estimate"  # [VERIFY after P1]
+SLOPE_SOURCE_SURVEYED = "cornell_survey"
+SLOPE_SOURCE_ESTIMATE = "usgs_lidar_1m_estimate"
+# "unknown" is used for every unsurveyed edge until P2's --elevation/lidar
+# fill runs (and will remain for segments <20 ft afterward, per plan §5.2).
+# cost.py's edge_cost handles it structurally (the `else` branch after the
+# surveyed/estimate checks), not by name; this constant exists so other
+# modules (e.g. explain.py) can refer to it by name instead of a bare string.
+SLOPE_SOURCE_UNKNOWN = "unknown"
 
-# Surface values that get an extra roughness penalty. [VERIFY after P1]
+# Surface values that get an extra roughness penalty. Confirmed present in
+# the real graph: "gravel", "cobblestone", "brick" (via P4 snapshot
+# exploration of graph_snapshot_p4.pkl). The real `surface` field also
+# contains other values not in this set that arguably read as "rough" too
+# -- "dirt", "mulch", "stone", "granite", "concrete tile", "cast stone",
+# "asphalt/other", "concrete/other" -- plus "unknown" and "crosswalk". P4
+# did not add these per its constraints (may only touch the kind/slope
+# constants in this block); flagged in the P4 report for a human to decide
+# whether to broaden ROUGH_SURFACES.
 ROUGH_SURFACES = {"gravel", "cobblestone", "brick"}
 
 # Preference keys a caller may override via POST /route "preferences" (CLAUDE.md

@@ -153,3 +153,79 @@ def test_safety_no_unlabeled_stairs_on_stair_footprints(G):
     assert not violations, (
         f"{len(violations)} edge(s) lie on a stair polygon but is_stairs=False: {violations[:10]}"
     )
+
+
+# ---- P2: elevation fill (--elevation, USGS EPQS 1 m lidar) ----
+#
+# These tests only make assertions about edges that P2 was allowed to touch
+# (see build_graph.is_elevation_candidate / run_elevation_fill). They are
+# skipped (not failed) if the graph was built without --elevation, since in
+# that case no edge should ever have slope_source == "usgs_lidar_1m_estimate"
+# and there is nothing P2-specific to check.
+
+MIN_SEG_FT = 20.0
+OUTLIER_SLOPE_CAP_PCT = 60.0
+
+
+@pytest.fixture(scope="module")
+def estimated_edges(edges):
+    return [(u, v, d) for u, v, d in edges if d.get("slope_source") == "usgs_lidar_1m_estimate"]
+
+
+def test_elevation_fill_present_or_skip(estimated_edges):
+    if not estimated_edges:
+        pytest.skip("graph.pkl was built without --elevation (no usgs_lidar_1m_estimate edges)")
+
+
+def test_no_cornell_survey_slope_changed_by_elevation_fill(edges):
+    """P2 must never overwrite a surveyed slope: every edge that still carries
+    slope_source == "cornell_survey" must not also carry the "estimated_slope"
+    flag (which run_elevation_fill only ever adds alongside
+    slope_source == "usgs_lidar_1m_estimate")."""
+    for u, v, d in edges:
+        if d.get("slope_source") == "cornell_survey":
+            flags = d.get("flags", "")
+            flag_list = flags.split(";") if isinstance(flags, str) else flags
+            assert "estimated_slope" not in flag_list, (
+                f"edge {u}-{v} is cornell_survey but was touched by the elevation fill"
+            )
+
+
+def test_every_filled_edge_is_long_enough_and_non_stair(estimated_edges):
+    if not estimated_edges:
+        pytest.skip("no usgs_lidar_1m_estimate edges in this graph")
+    for u, v, d in estimated_edges:
+        assert d.get("is_stairs") is False, f"edge {u}-{v} is a stair but has an estimated slope"
+        assert d.get("length_ft", 0.0) >= MIN_SEG_FT or "suspect_slope" in (
+            d.get("flags", "").split(";") if isinstance(d.get("flags"), str) else d.get("flags", [])
+        ), (
+            f"edge {u}-{v} has an estimated slope but is only {d.get('length_ft')} ft "
+            f"(< {MIN_SEG_FT} ft) and was not a suspect_slope re-measurement"
+        )
+
+
+def test_no_estimated_slope_above_outlier_cap(estimated_edges):
+    """Outlier guard (plan §5.2's 51% outlier): a lidar-derived slope estimate
+    above OUTLIER_SLOPE_CAP_PCT indicates a bad 1 m DEM read (building/tree
+    noise), not real terrain, and run_elevation_fill must fall back to
+    "unknown" rather than publish it."""
+    for u, v, d in estimated_edges:
+        assert d.get("slope_pct") is not None, f"edge {u}-{v} is an estimate with no slope_pct"
+        assert d["slope_pct"] <= OUTLIER_SLOPE_CAP_PCT, (
+            f"edge {u}-{v} has an estimated slope of {d['slope_pct']}%, above the "
+            f"{OUTLIER_SLOPE_CAP_PCT}% outlier cap"
+        )
+
+
+def test_short_unsurveyed_non_suspect_edges_stay_unknown(edges):
+    """Edges under MIN_SEG_FT that were never flagged suspect should never be
+    filled by the elevation step: they're too short to measure reliably."""
+    for u, v, d in edges:
+        if (
+            d.get("slope_source") == "unknown"
+            and d.get("length_ft", 0.0) < MIN_SEG_FT
+            and not d.get("is_stairs")
+        ):
+            flags = d.get("flags", "")
+            flag_list = flags.split(";") if isinstance(flags, str) else flags
+            assert "estimated_slope" not in flag_list
