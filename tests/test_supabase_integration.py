@@ -19,6 +19,7 @@ import uuid
 
 import pytest
 from dotenv import load_dotenv
+from postgrest import ReturnMethod
 
 load_dotenv()
 
@@ -72,8 +73,11 @@ def _cleanup(clients, created_report_ids):
     try:
         if created_report_ids:
             service.table("reports").delete().in_("id", created_report_ids).execute()
-        # Belt-and-suspenders: sweep any leftover TEST-noted rows from this run.
+        # Belt-and-suspenders: sweep any leftover TEST- or HACKED-noted rows
+        # from this run (an anon update that slipped through would leave a
+        # "HACKED" note behind).
         service.table("reports").delete().eq("note", TEST_NOTE).execute()
+        service.table("reports").delete().eq("note", "HACKED").execute()
     except Exception:
         # Teardown must not mask the original test failure; best-effort only.
         pass
@@ -175,36 +179,55 @@ def test_anon_cannot_update_reports(clients, created_report_ids):
     row1 = r1.data[0]
     created_report_ids.append(row1["id"])
 
-    with pytest.raises(Exception):
-        anon.table("reports").update({"status": "confirmed"}).eq("id", row1["id"]).execute()
+    # No UPDATE policy for anon/authenticated: with RLS enabled this is a
+    # silent no-op (0 rows affected), not an exception.
+    anon.table("reports").update({"status": "confirmed", "note": "HACKED"}).eq(
+        "id", row1["id"]
+    ).execute()
 
-    check = service.table("reports").select("status").eq("id", row1["id"]).execute().data[0]
+    check = service.table("reports").select("status,note").eq("id", row1["id"]).execute().data[0]
     assert check["status"] == "pending"
+    assert check["note"] == TEST_NOTE
 
 
 def test_anon_cannot_insert_seed_source(clients, created_report_ids):
-    anon, _ = clients
-    with pytest.raises(Exception):
+    anon, service = clients
+    try:
         result = _insert_report(anon, DEMO_LON, DEMO_LAT, report_type="construction", source="seed")
-        # If no exception was raised (e.g. silently coerced), make sure it
-        # was NOT stored as seed so we still fail the test meaningfully.
-        if result.data:
-            created_report_ids.append(result.data[0]["id"])
-            assert result.data[0]["source"] != "seed"
+    except Exception:
+        # Rejected outright -- also acceptable.
+        return
+
+    # The BEFORE INSERT trigger coerces source to 'user' for non-service
+    # callers, so the insert succeeds by design. Verify it was NOT stored as
+    # seed.
+    row = result.data[0]
+    created_report_ids.append(row["id"])
+    readback = service.table("reports").select("source,status").eq("id", row["id"]).execute().data[0]
+    assert readback["source"] == "user"
+    assert readback["status"] == "pending"
 
 
 def test_same_user_hash_cannot_confirm_twice(clients, created_report_ids):
-    anon, _ = clients
+    anon, service = clients
     r1 = _insert_report(anon, DEMO_LON, DEMO_LAT, report_type="crowded")
     row1 = r1.data[0]
     created_report_ids.append(row1["id"])
 
+    # report_confirmations has no SELECT policy by design: request minimal
+    # return representation so PostgREST never tries to read the row back.
     user_hash = _make_user_hash()
     anon.table("report_confirmations").insert(
-        {"report_id": row1["id"], "user_hash": user_hash}
+        {"report_id": row1["id"], "user_hash": user_hash},
+        returning=ReturnMethod.minimal,
     ).execute()
 
     with pytest.raises(Exception):
         anon.table("report_confirmations").insert(
-            {"report_id": row1["id"], "user_hash": user_hash}
+            {"report_id": row1["id"], "user_hash": user_hash},
+            returning=ReturnMethod.minimal,
         ).execute()
+
+    check = service.table("reports").select("confirmations,status").eq("id", row1["id"]).execute().data[0]
+    assert check["confirmations"] == 2
+    assert check["status"] == "confirmed"
