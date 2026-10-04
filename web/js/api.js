@@ -56,16 +56,3 @@ export function buildRequestBody(kind, origin, destination, priorities) {
   return { ...base, priorities: priorities || {} };
 }
 
-export function getCurrentLocation() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error("geolocation not supported"));
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => reject(new Error("geolocation failed")),
-      { timeout: 10000 }
-    );
-  });
-}

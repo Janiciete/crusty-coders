@@ -16,7 +16,7 @@ import pytest
 from service.conditions import Conditions, get_conditions
 from service.cost import compute_dark_threshold, edge_cost, hard_limit_violations
 from service.profiles import PROFILE_PRESETS, resolve_preferences
-from service.router import find_routes
+from service.router import _edge_key, find_routes
 from tests.conftest import make_edge
 
 
@@ -405,3 +405,112 @@ def test_multigraph_support(main_multigraph):
     assert len(fastest_routes) == 1
     assert fastest_routes[0].node_path == ["O", "C", "E_access"]
     assert fastest_routes[0].length_ft == pytest.approx(80.0)
+
+
+# ---------------------------------------------------------------------------
+# Prompt A: find_routes fallback tiers 3 (widen to any routable destination
+# entrance) and 4 (let a "remove" effect through as a very heavy penalty
+# instead of excluding the edge). Tiers 1-2 are exercised by the pre-existing
+# tests above (test_wheelchair_avoids_stairs_fastest_takes_shortcut,
+# test_curb_cut_blocks_wheelchair_not_low_vision, test_fallback_when_only_stairs)
+# and are required to be byte-for-byte unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_tier3_widens_to_non_accessible_entrance_when_none_accessible_exists():
+    G = nx.Graph()
+    G.add_node("O5")
+    G.add_node(
+        "E_na", access="not_accessible", door_id="DNA", building="NoAccessHall"
+    )
+    G.add_edge("O5", "E_na", **make_edge(length_ft=40.0))
+    conditions = Conditions()
+
+    routes = find_routes(
+        G, "O5", ["E_na"], PROFILE_PRESETS["wheelchair"], conditions, k=1
+    )
+    assert len(routes) == 1
+    route = routes[0]
+    assert route.node_path[-1] == "E_na"
+    assert route.used_fallback is True
+    assert route.forced_blocked_edges == []
+
+
+def test_tier3_does_not_widen_when_an_accessible_destination_is_reachable():
+    # Regression guard: tier 3 must never be preferred over tiers 1/2 when
+    # an accessible destination is actually reachable -- this is exactly
+    # test_wheelchair_destination_must_be_accessible's scenario, repeated
+    # here at the fallback-tier level to pin it down explicitly.
+    conditions = Conditions()
+    routes = find_routes(
+        main_graph_two_targets(), "O", ["E_access", "E_unknown"],
+        PROFILE_PRESETS["wheelchair"], conditions, k=1,
+    )
+    assert routes[0].node_path[-1] == "E_access"
+    assert routes[0].used_fallback is False
+
+
+def main_graph_two_targets():
+    """Local helper (not a fixture): O --step-free detour--> E_access
+    (accessible), O --shorter--> E_unknown (unknown access, never chosen
+    when require_accessible_entrance). Equivalent to the relevant slice of
+    conftest.py's main_graph, kept standalone so this module doesn't need
+    to request the `main_graph` fixture outside a test function.
+    """
+    G = nx.Graph()
+    G.add_node("O")
+    G.add_node("A")
+    G.add_node("B")
+    G.add_node("E_access", access="accessible", door_id="D1", building="Goldwin Smith")
+    G.add_node("E_unknown", access="unknown", door_id="D2", building="Goldwin Smith")
+    G.add_edge("O", "A", **make_edge(length_ft=100.0, slope_pct=2.0))
+    G.add_edge("A", "B", **make_edge(length_ft=100.0, slope_pct=2.0))
+    G.add_edge("B", "E_access", **make_edge(length_ft=50.0, slope_pct=2.0))
+    G.add_edge("O", "E_unknown", **make_edge(length_ft=40.0, kind="door approach"))
+    return G
+
+
+def test_tier4_lets_a_forced_blocked_path_through_as_a_last_resort():
+    G = nx.Graph()
+    G.add_node("O6")
+    G.add_node("E_only", access="accessible", door_id="DO", building="OnlyPathHall")
+    G.add_edge("O6", "E_only", **make_edge(length_ft=50.0))
+    conditions = Conditions()
+
+    blocked = {_edge_key("O6", "E_only", None): "remove"}
+    routes = find_routes(
+        G, "O6", ["E_only"], PROFILE_PRESETS["fastest"], conditions,
+        edge_effects=blocked, k=1,
+    )
+    assert len(routes) == 1
+    route = routes[0]
+    assert route.used_fallback is True
+    assert route.forced_blocked_edges == [_edge_key("O6", "E_only", None)]
+
+
+def test_tier4_not_needed_when_remove_effect_has_any_detour():
+    # test_remove_effect_forces_detour_over_20_percent already proves the
+    # detour is found at all -- this pins down that it's found at tier 1
+    # (no fallback, no forced-blocked edges), since tier 4 must only ever
+    # be used as an actual last resort.
+    G = nx.Graph()
+    conditions = Conditions()
+    G.add_node("O")
+    G.add_node("R1")
+    G.add_node("R2")
+    G.add_node("R3")
+    G.add_node("E_access5", access="accessible", door_id="D4", building="Annex2")
+    G.add_edge("O", "R1", **make_edge(length_ft=10.0))
+    G.add_edge("R1", "R2", **make_edge(length_ft=100.0))
+    G.add_edge("R1", "R3", **make_edge(length_ft=70.0))
+    G.add_edge("R3", "R2", **make_edge(length_ft=70.0))
+    G.add_edge("R2", "E_access5", **make_edge(length_ft=20.0))
+
+    removed = {_edge_key("R1", "R2", None): "remove"}
+    routes = find_routes(
+        G, "O", ["E_access5"], PROFILE_PRESETS["fastest"], conditions,
+        edge_effects=removed, k=1,
+    )
+    assert len(routes) == 1
+    assert routes[0].used_fallback is False
+    assert routes[0].forced_blocked_edges == []

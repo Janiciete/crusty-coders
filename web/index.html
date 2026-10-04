@@ -25,6 +25,11 @@
   </div>
 
   <main id="panel" class="panel" aria-label="Route planner">
+    <button type="button" class="back-button" id="back-btn" hidden>
+      <span class="back-button-arrow" aria-hidden="true">&larr;</span>
+      <span class="back-button-label">Back</span>
+    </button>
+
     <div class="sheet-handle-row">
       <button type="button" class="sheet-handle" id="sheet-expand-btn" aria-label="Resize panel">
         <span class="sheet-handle-grip" aria-hidden="true"></span>
@@ -49,7 +54,6 @@
   </main>
 
   <div id="aria-live-region" class="visually-hidden" aria-live="polite"></div>
-  <datalist id="buildings-list"></datalist>
 
   <div class="attribution-bar">
     <span>Routes are guidance, not ADA certification.</span>
@@ -60,44 +64,63 @@
   <div id="facilities-panel" hidden></div>
 
   <template id="tpl-step-destination">
-    <h1 class="step-question">Where to?</h1>
+    <h1 class="step-question" id="step-heading" tabindex="-1">Where to?</h1>
     <div class="field">
-      <label for="destination-input" class="visually-hidden">Destination building</label>
-      <input
-        id="destination-input"
-        class="search-input"
-        type="text"
-        list="buildings-list"
-        autocomplete="off"
-        placeholder="Search for a building…"
-      />
-      <p class="field-hint" id="destination-hint" role="status"></p>
+      <span id="destination-label" class="visually-hidden">Destination building</span>
+      <button
+        type="button"
+        class="picker-trigger"
+        id="destination-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+        aria-labelledby="destination-label destination-picker-text"
+      >
+        <span class="picker-trigger-text is-placeholder" id="destination-picker-text">Choose a building</span>
+        <span class="picker-trigger-chevron" aria-hidden="true">&#9662;</span>
+      </button>
+      <div id="destination-input" hidden></div>
+      <div class="picker-panel" id="destination-picker-panel" aria-hidden="true">
+        <ul
+          class="picker-listbox"
+          id="destination-picker-listbox"
+          role="listbox"
+          aria-label="Destination building"
+          tabindex="-1"
+        ></ul>
+      </div>
     </div>
   </template>
 
   <template id="tpl-step-origin">
-    <h1 class="step-question">Starting from</h1>
-    <div class="origin-choice" role="group" aria-label="Starting point">
-      <button type="button" class="choice-button" id="origin-use-location">Use my location</button>
-      <button type="button" class="choice-button" id="origin-use-building">Choose a building</button>
-    </div>
-    <p class="field-hint" id="geolocation-note" hidden>Used for this route only. Never saved.</p>
-    <div class="field" id="origin-building-field" hidden>
-      <label for="origin-input" class="visually-hidden">Starting building</label>
-      <input
-        id="origin-input"
-        class="search-input"
-        type="text"
-        list="buildings-list"
-        autocomplete="off"
-        placeholder="Search for a building…"
-      />
+    <h1 class="step-question" id="step-heading" tabindex="-1">Starting from</h1>
+    <div class="field">
+      <span id="origin-label" class="visually-hidden">Starting building</span>
+      <button
+        type="button"
+        class="picker-trigger"
+        id="origin-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+        aria-labelledby="origin-label origin-picker-text"
+      >
+        <span class="picker-trigger-text is-placeholder" id="origin-picker-text">Choose a building</span>
+        <span class="picker-trigger-chevron" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="picker-panel" id="origin-picker-panel" aria-hidden="true">
+        <ul
+          class="picker-listbox"
+          id="origin-picker-listbox"
+          role="listbox"
+          aria-label="Starting building"
+          tabindex="-1"
+        ></ul>
+      </div>
     </div>
     <p class="field-hint" id="origin-error" role="alert" hidden></p>
   </template>
 
   <template id="tpl-step-chips">
-    <h1 class="step-question">Anything we should avoid?</h1>
+    <h1 class="step-question" id="step-heading" tabindex="-1">Anything we should avoid?</h1>
     <button type="button" class="link-button" id="use-usual-prefs" hidden>Use my usual preferences</button>
     <div id="ai-slot" hidden></div>
     <div class="chip-grid" role="group" aria-label="Accessibility preferences">
@@ -120,7 +143,7 @@
   </template>
 
   <template id="tpl-step-importance">
-    <h1 class="step-question">How much does each one matter?</h1>
+    <h1 class="step-question" id="step-heading" tabindex="-1">How much does each one matter?</h1>
     <div id="importance-list"></div>
   </template>
 
@@ -150,12 +173,16 @@
   </template>
 
   <template id="tpl-results">
-    <div id="no-perfect-route-banner" class="banner" hidden>
-      <p><strong>We couldn't find a route that meets every preference.</strong></p>
-      <ul id="compromise-list"></ul>
+    <h1 class="step-question" id="step-heading" tabindex="-1">Recommended for you</h1>
+
+    <div id="fit-banner" class="fit-banner" hidden role="status">
+      <span class="fit-banner-icon" aria-hidden="true">&#9888;</span>
+      <div class="fit-banner-body">
+        <p>This route doesn't fully fit your preferences</p>
+        <ul id="fit-reasons-list"></ul>
+      </div>
     </div>
 
-    <h1 class="step-question">Recommended for you</h1>
     <div class="headline-stat">
       <span class="headline-number" id="headline-minutes"></span>
       <span class="headline-label">min &middot; <span id="headline-distance"></span></span>

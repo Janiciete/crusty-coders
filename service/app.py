@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 
+import networkx as nx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -114,6 +115,26 @@ def _safe_num(v):
 # ---------------------------------------------------------------------------
 
 
+# Prompt A task 3: cache each GraphStore's largest connected component (by
+# node count -- edges all carry comparable length_ft, and this only needs
+# to be "the" dominant component, not a weighted one) so /buildings and
+# building resolution agree on which entrances are actually routable,
+# without recomputing it on every request. Keyed by the graph object's
+# identity so test fixtures (a fresh store per test) and a reloaded real
+# graph never see a stale entry.
+_LARGEST_COMPONENT_CACHE: dict[int, set] = {}
+
+
+def _largest_component(G) -> set:
+    key = id(G)
+    cached = _LARGEST_COMPONENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    comp: set = max(nx.connected_components(G), key=len) if G.number_of_nodes() else set()
+    _LARGEST_COMPONENT_CACHE[key] = comp
+    return comp
+
+
 def _report_source(r):
     return r.get("source") if isinstance(r, dict) else getattr(r, "source", None)
 
@@ -142,7 +163,18 @@ def _resolve_building_or_point(store: GraphStore, loc: LocationIn) -> tuple[list
                 },
             )
         all_entrances = store.building_index.get(canonical, [])
-        routable = [n for n in all_entrances if store.graph.degree(n) > 0]
+        largest_component = _largest_component(store.graph)
+        # Same "routable" definition /buildings uses (task 3): degree > 0
+        # AND in the largest connected component. A building can have a
+        # routable-but-disconnected entrance (a separate small component)
+        # alongside a properly-connected one; without this filter, picking
+        # the disconnected entrance here would make a building /buildings
+        # lists as valid still 422 when actually requested.
+        routable = [
+            n
+            for n in all_entrances
+            if store.graph.degree(n) > 0 and n in largest_component
+        ]
         if not routable:
             raise HTTPException(
                 422, detail=f"building {canonical!r} has no routable entrance"
@@ -286,7 +318,25 @@ def conditions_endpoint(darkness: str = "auto", ice: str = "auto"):
 
 @app.get("/buildings")
 def buildings_endpoint(store: GraphStore = Depends(get_store)):
-    return {"buildings": sorted(store.building_index.keys())}
+    """Only buildings with at least one routable (degree > 0) entrance node
+    that is also in the graph's largest connected component (Prompt A task
+    3). Previously returned every key in building_index, including
+    buildings with no routable entrance at all or sitting in one of the
+    graph's small disconnected components (~5% of the real graph by
+    length, CLAUDE.md §9 P1 note) -- those could never actually be routed
+    to/from, so `/route` would 422 on them even though `/buildings` listed
+    them as valid choices.
+    """
+    G = store.graph
+    largest_component = _largest_component(G)
+
+    valid = set()
+    for name, nodes in store.building_index.items():
+        for n in nodes:
+            if G.degree(n) > 0 and n in largest_component:
+                valid.add(name)
+                break
+    return {"buildings": sorted(valid)}
 
 
 @app.get("/bottlenecks")
@@ -383,6 +433,12 @@ def route_endpoint(req: RouteRequest, store: GraphStore = Depends(get_store)):
     baseline_length = fastest_route.length_ft if fastest_route is not None else routes[0].length_ft
     routes = _enforce_distance_tolerance(routes, baseline_length, prefs.distance_tolerance, warnings)
 
+    # Fallback tier 4 (service/router.py): a reported blocked path couldn't
+    # be avoided on any returned route; never silently drop the trip, but
+    # say so plainly here and via each affected route's `fit`.
+    if any(r.forced_blocked_edges for r in routes):
+        warnings.append("A reported blocked path couldn't be avoided on this trip.")
+
     route_outputs = []
     for i, r in enumerate(routes):
         stats = explain.compute_stats(
@@ -397,6 +453,7 @@ def route_endpoint(req: RouteRequest, store: GraphStore = Depends(get_store)):
                 "explanation": explain.build_explanation(
                     store.graph, r, stats, prefs, fastest_route
                 ),
+                "fit": explain.build_fit(store.graph, r, stats, prefs, baseline_length),
                 "segments": explain.build_segments(store.graph, r),
             }
         )

@@ -63,6 +63,10 @@ class RouteResult:
     cost: float = 0.0
     violations: list = field(default_factory=list)
     used_fallback: bool = False
+    # Tier 4 only (see find_routes): edge_keys of "remove"-effect (reported
+    # blocked-path) edges this route was forced to use because no route
+    # avoiding them existed even under the relaxed/widened earlier tiers.
+    forced_blocked_edges: list = field(default_factory=list)
 
 
 def _edge_lengths(G) -> dict:
@@ -72,6 +76,17 @@ def _edge_lengths(G) -> dict:
     return lengths
 
 
+# Tier 4 (find_routes): a reported blocked path ("remove" edge effect) is
+# let through as a very heavy penalty instead of excluding the edge, so a
+# live report can never make a trip between two listed buildings outright
+# impossible -- it just becomes a strongly discouraged last resort. Chosen
+# as a large multiple of the existing per-violation fallback penalty so a
+# forced-blocked edge is always worse than any ordinary hard-limit
+# violation, but a finite number (never None/inf) so Dijkstra still works
+# and a route is still returned when this is truly the only way through.
+_FORCED_BLOCKED_PENALTY = PENALTY_WEIGHTS["fallback_violation_penalty"] * 20
+
+
 def _build_adjacency(
     G,
     prefs: ResolvedPrefs,
@@ -79,17 +94,21 @@ def _build_adjacency(
     edge_effects: dict,
     dark_threshold: float,
     enforce_hard_limits: bool,
+    remove_as_penalty: bool = False,
 ) -> dict:
-    """node -> list of (neighbor, edge_key, attrs, cost, violations).
+    """node -> list of (neighbor, edge_key, attrs, cost, violations, forced_blocked).
 
     When enforce_hard_limits is True, edges with any hard-limit violation
     are left out of the adjacency entirely (impassable). When False (the
     fallback pass), they are kept but penalized heavily and their
     violations are recorded so the caller can report them.
 
-    An edge effect of "remove" always blocks the edge, in both passes,
-    since that represents a physical closure (a live report), not a
-    preference.
+    An edge effect of "remove" blocks the edge (cost.edge_cost returns
+    None for it) unless remove_as_penalty is True (tier 4 only), in which
+    case the edge is kept passable with a very heavy flat penalty
+    (_FORCED_BLOCKED_PENALTY) instead, and `forced_blocked` is True for it
+    so the caller can report it (CLAUDE.md §6: never silently drop a
+    report; here, never silently drop the *trip* either).
     """
     adj: dict = {}
     for u, v, key, attrs in _edge_items(G):
@@ -100,15 +119,24 @@ def _build_adjacency(
         if enforce_hard_limits and violations:
             continue
 
-        cost = edge_cost(attrs, prefs, conditions, effect=effect, dark_threshold=dark_threshold)
+        forced_blocked = False
+        cost_effect = effect
+        if effect == "remove" and remove_as_penalty:
+            forced_blocked = True
+            cost_effect = None  # bypass cost.py's hard block; penalize below instead
+
+        cost = edge_cost(attrs, prefs, conditions, effect=cost_effect, dark_threshold=dark_threshold)
         if cost is None:
             continue
+
+        if forced_blocked:
+            cost += _FORCED_BLOCKED_PENALTY
 
         if not enforce_hard_limits and violations:
             cost += PENALTY_WEIGHTS["fallback_violation_penalty"] * len(violations)
 
-        adj.setdefault(u, []).append((v, ekey, attrs, cost, violations))
-        adj.setdefault(v, []).append((u, ekey, attrs, cost, violations))
+        adj.setdefault(u, []).append((v, ekey, attrs, cost, violations, forced_blocked))
+        adj.setdefault(v, []).append((u, ekey, attrs, cost, violations, forced_blocked))
     return adj
 
 
@@ -133,12 +161,12 @@ def _dijkstra(adj: dict, origin, targets, edge_multiplier: dict | None = None):
         visited.add(u)
         if u in targets:
             return u, d, prev
-        for (v, ekey, attrs, cost, violations) in adj.get(u, []):
+        for (v, ekey, attrs, cost, violations, forced_blocked) in adj.get(u, []):
             mult = edge_multiplier.get(ekey, 1.0)
             nd = d + cost * mult
             if v not in dist or nd < dist[v] - 1e-9:
                 dist[v] = nd
-                prev[v] = (u, ekey, attrs, cost, violations)
+                prev[v] = (u, ekey, attrs, cost, violations, forced_blocked)
                 heapq.heappush(heap, (nd, next(counter), v))
 
     return None, math.inf, prev
@@ -146,22 +174,23 @@ def _dijkstra(adj: dict, origin, targets, edge_multiplier: dict | None = None):
 
 def _reconstruct(prev: dict, origin, target):
     node_path = [target]
-    edge_records = []  # (edge_key, attrs, violations)
+    edge_records = []  # (edge_key, attrs, violations, forced_blocked)
     cur = target
     while cur != origin:
-        pv, ekey, attrs, _cost, violations = prev[cur]
-        edge_records.append((ekey, attrs, violations))
+        pv, ekey, attrs, _cost, violations, forced_blocked = prev[cur]
+        edge_records.append((ekey, attrs, violations, forced_blocked))
         node_path.append(pv)
         cur = pv
     node_path.reverse()
     edge_records.reverse()
 
-    edge_keys = [ek for ek, _a, _v in edge_records]
-    length_ft = sum(a.get("length_ft", 0.0) for _ek, a, _v in edge_records)
+    edge_keys = [ek for ek, _a, _v, _f in edge_records]
+    length_ft = sum(a.get("length_ft", 0.0) for _ek, a, _v, _f in edge_records)
     violations_out = [
-        {"edge_key": ek, "codes": v} for ek, _a, v in edge_records if v
+        {"edge_key": ek, "codes": v} for ek, _a, v, _f in edge_records if v
     ]
-    return edge_keys, node_path, length_ft, violations_out
+    forced_blocked_edges = [ek for ek, _a, _v, f in edge_records if f]
+    return edge_keys, node_path, length_ft, violations_out, forced_blocked_edges
 
 
 def find_routes(
@@ -182,11 +211,28 @@ def find_routes(
     attribute exists and is not "accessible" is dropped ("unknown" is never
     chosen, per CLAUDE.md §5).
 
-    Fallback rule: if no destination is reachable while enforcing hard
-    limits, hard limits are relaxed into a heavy per-violation penalty and
-    the search is retried; the single best route found this way is
-    returned with `used_fallback=True` and every violating edge listed in
-    `violations`.
+    Fallback rule (CLAUDE.md §6: "never silently drops limits" -- and never
+    silently drops the trip either): four tiers, each tried only if the
+    previous one finds no route to any eligible destination at all.
+
+      1. Strict: hard limits enforced; destinations filtered to
+         accessible-only when `prefs.require_accessible_entrance` (exactly
+         today's pre-existing behavior -- no regression).
+      2. Hard limits relaxed into a heavy per-violation penalty (the
+         pre-existing fallback rule); same destination set as tier 1.
+      3. Also accept any routable destination entrance, even when
+         `require_accessible_entrance` is set -- a non-accessible door is
+         no longer an exclusion, just something the caller (app.py /
+         explain.py) can see from the chosen route's destination node and
+         report as a violation/`fit` reason.
+      4. Also let a "remove" edge effect (a reported blocked path) through
+         as a very heavy penalty instead of excluding the edge, so a live
+         report can never make the whole trip impossible by itself.
+
+    The single best route found at whichever tier first succeeds is used
+    as the base for the alternatives search below; `used_fallback` is True
+    for any tier past the first, and `forced_blocked_edges` on the
+    resulting RouteResult(s) is non-empty only when tier 4 was needed.
 
     Alternatives: up to k routes, each subsequent search penalizing the
     previous routes' edges x1.5 (compounding); a candidate whose length
@@ -199,32 +245,53 @@ def find_routes(
     if origin not in G.nodes:
         return []
 
-    eligible = []
-    for d in destinations:
-        if d not in G.nodes:
-            continue
-        if prefs.require_accessible_entrance:
-            access = G.nodes[d].get("access")
-            if access is not None and access != "accessible":
+    def _eligible(widen: bool) -> list:
+        elig = []
+        for d in destinations:
+            if d not in G.nodes:
                 continue
-        eligible.append(d)
-    if not eligible:
+            if not widen and prefs.require_accessible_entrance:
+                access = G.nodes[d].get("access")
+                if access is not None and access != "accessible":
+                    continue
+            elig.append(d)
+        return elig
+
+    narrow_eligible = _eligible(widen=False)
+    wide_eligible = _eligible(widen=True)
+    if not wide_eligible:
         return []
 
     dark_threshold = compute_dark_threshold(G)
     edge_lengths = _edge_lengths(G)
 
-    adj_strict = _build_adjacency(G, prefs, conditions, edge_effects, dark_threshold, True)
-    target, dist, prev = _dijkstra(adj_strict, origin, eligible)
+    tiers = [
+        (narrow_eligible, True, False),
+        (narrow_eligible, False, False),
+        (wide_eligible, False, False),
+        (wide_eligible, False, True),
+    ]
 
-    used_fallback = False
-    adj = adj_strict
+    target = dist = prev = None
+    eligible = adj = None
+    tier_used = 0
+    for i, (elig, enforce_hard, remove_as_penalty) in enumerate(tiers, start=1):
+        if not elig:
+            continue
+        candidate_adj = _build_adjacency(
+            G, prefs, conditions, edge_effects, dark_threshold, enforce_hard, remove_as_penalty
+        )
+        t, d, p = _dijkstra(candidate_adj, origin, elig)
+        if t is not None:
+            target, dist, prev = t, d, p
+            eligible, adj = elig, candidate_adj
+            tier_used = i
+            break
+
     if target is None:
-        adj = _build_adjacency(G, prefs, conditions, edge_effects, dark_threshold, False)
-        target, dist, prev = _dijkstra(adj, origin, eligible)
-        used_fallback = True
-        if target is None:
-            return []
+        return []
+
+    used_fallback = tier_used > 1
 
     routes: list[RouteResult] = []
     accepted: list[tuple[set, float]] = []
@@ -241,7 +308,9 @@ def find_routes(
         if cur_target is None:
             break
 
-        edge_keys, node_path, length_ft, violations = _reconstruct(cur_prev, origin, cur_target)
+        edge_keys, node_path, length_ft, violations, forced_blocked_edges = _reconstruct(
+            cur_prev, origin, cur_target
+        )
         edge_key_set = set(edge_keys)
 
         overlaps_prior = False
@@ -265,6 +334,7 @@ def find_routes(
                 cost=cur_dist,
                 violations=violations,
                 used_fallback=used_fallback,
+                forced_blocked_edges=forced_blocked_edges,
             )
         )
         accepted.append((edge_key_set, length_ft))

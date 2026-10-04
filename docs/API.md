@@ -83,6 +83,7 @@ A request with no `profiles` and no `priorities` behaves exactly like `profiles:
         "estimated_segments": 0
       },
       "violations": [],
+      "fit": {"status": "full", "reasons": []},
       "explanation": [
         "Avoids 8 staircases (59 steps)",
         "Maximum slope: 4.6% (within the 5% ADA walkway limit)",
@@ -110,6 +111,36 @@ A request with no `profiles` and no `priorities` behaves exactly like `profiles:
 `geometry` is always a GeoJSON `LineString` in EPSG:4326, oriented from origin to destination, built from each edge's own surveyed geometry where available (falling back to a straight line between the two endpoint nodes otherwise).
 
 `violations` is non-empty only when the fallback rule had to relax a hard limit (`used_fallback` internally); each entry is `{"edge_id", "code", "message"}` where `message` names the specific segment and the standard it fails, e.g. `"segment E005493: stairs (0 steps), not usable with this profile's avoid-stairs limit"` or `"segment E001244: 11% slope, exceeds the 8.33% ADA ramp limit"`. The wording never says "safe"; estimated (lidar) slopes and inferred/unverified edges are called out as "estimated" / "unverified", never stated as fact.
+
+### `fit`
+
+Every route also carries a `fit` object: `{"status": "full" | "partial", "reasons": ["…"]}`. This is the plain-language answer to "did this route actually meet what I asked for" -- separate from, and never a replacement for, `violations`/`warnings`/`explanation` above, which are unchanged.
+
+`status` is `"partial"` when the route has any hard-limit violation (i.e. it only exists because of the fallback rule below), ends at a destination door that isn't marked accessible when an accessible one was required, had to use a reported blocked path that couldn't be avoided, or is longer than `preferences.distance_tolerance` times the unconstrained shortest route. Otherwise it's `"full"`.
+
+`reasons` are short lines, **grouped by type** (never one line per edge), with no disability labels and never the word "safe"; estimated (lidar) slopes are labeled "estimated". For example:
+
+```json
+{"status": "partial", "reasons": [
+  "Uses 2 staircases (31 steps)",
+  "3 short stretches steeper than your 5% limit (steepest 9.4%, estimated)",
+  "Ends at a door not marked accessible",
+  "1.9× longer than you said you'd walk"
+]}
+```
+
+A route that meets everything the request asked for comes back as `{"status": "full", "reasons": []}`.
+
+### Fallback rule (always return a route)
+
+`POST /route` tries up to four tiers between the same origin and the same set of candidate destination entrances, stopping at the first tier that finds any route at all:
+
+1. **Strict.** Hard limits enforced; destinations filtered to accessible-only when `require_accessible_entrance` is set. (This is the only tier most requests ever need.)
+2. **Hard limits relaxed.** Same destination set as tier 1, but hard-limit violations become a heavy routing-cost penalty instead of excluding the edge -- the pre-existing fallback rule (CLAUDE.md §6).
+3. **Any routable destination entrance.** If no accessible destination entrance is reachable at all (even under tier 2), a non-accessible or unverified-access entrance is accepted instead of failing outright; this shows up as the `"Ends at a door not marked accessible"` `fit` reason (and the existing destination-entrance-fallback `warnings` note) rather than as an exclusion.
+4. **Reported blocked paths let through.** If a reported blocked path (a `"remove"` live-report effect) is the only way to the destination even under tier 3, it's let through as a very heavy routing-cost penalty instead of excluding the edge, and the response's top-level `warnings` includes `"A reported blocked path couldn't be avoided on this trip."` The affected route's `fit.reasons` includes `"Uses a reported blocked path that couldn't be avoided on this trip"`.
+
+Because `GET /buildings` only ever lists buildings with a routable, reachable entrance (see below), a 422 "no usable route found" between two buildings both drawn from `/buildings` should not happen in practice; it remains the literal last resort for unreachable combinations (e.g. a point far off the path network, or two buildings that `/buildings` would also never both list together).
 
 `warnings` (top-level) can include things like:
 - A destination-entrance fallback notice, e.g. `"No accessible entrance found for this destination; falling back to a non-accessible entrance and this route will carry violations."`
@@ -183,7 +214,7 @@ GET /conditions?darkness=on&ice=off
 {"buildings": ["A D White House", "Alice H Cook House", "...", "Goldwin Smith Hall"]}
 ```
 
-Alphabetically sorted building names drawn from the entrance nodes in the loaded graph (including buildings whose entrances currently have no routable edges; `/route` will reject those with a 422 if actually requested).
+Alphabetically sorted building names, filtered to only those with at least one entrance that is both routable (has a graph edge) and in the graph's largest connected component (~95% of the real graph's edges by length; the remaining small components are not reachable from the rest of campus). A building with every entrance disconnected or edge-less is left off this list entirely, rather than being listed and then 422ing when actually requested. (On the real graph this currently drops the list from 100 to 95 buildings.)
 
 ## GET /bottlenecks
 

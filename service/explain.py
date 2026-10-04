@@ -326,3 +326,87 @@ def build_explanation(
         lines.append(f"Does not fully meet standards here: {v['message']}")
 
     return lines
+
+
+# ---------------------------------------------------------------------------
+# `fit` (Prompt A task 2): a route-level "does this actually meet what you
+# asked for" summary, grouped by type (never one line per edge), with no
+# disability labels, never "safe", and estimated slopes labeled "estimated"
+# -- same rules as build_explanation. Separate from (and does not change)
+# `violations`/`warnings`.
+# ---------------------------------------------------------------------------
+
+_SLOPE_VIOLATION_CODES = {"slope_over_max", "slope_needs_ramp", "slope_over_max_estimated"}
+
+
+def _violation_edge_keys(route, *codes: str) -> set:
+    wanted = set(codes)
+    return {v["edge_key"] for v in route.violations if wanted & set(v["codes"])}
+
+
+def build_fit(G, route, stats: dict, prefs: ResolvedPrefs, baseline_length_ft: float | None) -> dict:
+    """{"status": "full"|"partial", "reasons": [...]}.
+
+    "partial" whenever the route has any hard-limit violation (fallback
+    tiers 2-4), a non-accessible destination door when an accessible one
+    was required, a forced-through blocked-path edge (tier 4), or a length
+    beyond `prefs.distance_tolerance` vs. the unconstrained baseline.
+    `reasons` are short, plain-language lines grouped by type.
+    """
+    reasons: list[str] = []
+
+    stairs_edges = _violation_edge_keys(route, "stairs")
+    if stairs_edges:
+        steps = sum((_edge_data(G, ek).get("steps") or 0) for ek in stairs_edges)
+        plural = "s" if len(stairs_edges) != 1 else ""
+        step_txt = f" ({steps} steps)" if steps else ""
+        reasons.append(f"Uses {len(stairs_edges)} staircase{plural}{step_txt}")
+
+    slope_edges = _violation_edge_keys(route, *_SLOPE_VIOLATION_CODES)
+    if slope_edges:
+        max_slope = 0.0
+        any_estimated = False
+        for ek in slope_edges:
+            data = _edge_data(G, ek)
+            slope = data.get("slope_pct")
+            if slope is not None:
+                max_slope = max(max_slope, slope)
+            if data.get("slope_source") == SLOPE_SOURCE_ESTIMATE:
+                any_estimated = True
+        limit = prefs.max_slope_pct
+        if limit == float("inf"):
+            limit = prefs.ramp_required_above_pct
+        limit_txt = f"{limit:.0f}%" if limit != float("inf") else "slope"
+        plural = "es" if len(slope_edges) != 1 else ""
+        est_txt = ", estimated" if any_estimated else ""
+        reasons.append(
+            f"{len(slope_edges)} short stretch{plural} steeper than your {limit_txt} limit "
+            f"(steepest {max_slope:.1f}%{est_txt})"
+        )
+
+    curb_cut_edges = _violation_edge_keys(route, "curb_cuts")
+    if curb_cut_edges:
+        plural = "s" if len(curb_cut_edges) != 1 else ""
+        reasons.append(f"{len(curb_cut_edges)} crossing{plural} without full curb cuts")
+
+    width_edges = _violation_edge_keys(route, "width")
+    if width_edges:
+        plural = "es" if len(width_edges) != 1 else ""
+        reasons.append(
+            f"{len(width_edges)} stretch{plural} narrower than your "
+            f"{prefs.min_width_ft:.1f} ft minimum"
+        )
+
+    de = stats.get("destination_entrance")
+    if prefs.require_accessible_entrance and de is not None and de.get("access") != "accessible":
+        reasons.append("Ends at a door not marked accessible")
+
+    if route.forced_blocked_edges:
+        reasons.append("Uses a reported blocked path that couldn't be avoided on this trip")
+
+    if baseline_length_ft and baseline_length_ft > 0:
+        ratio = route.length_ft / baseline_length_ft
+        if ratio > prefs.distance_tolerance + 1e-6:
+            reasons.append(f"{ratio:.1f}× longer than you said you'd walk")
+
+    return {"status": "partial" if reasons else "full", "reasons": reasons}

@@ -29,6 +29,8 @@ from service import reports as reports_module
 from service.app import app
 from service.graph_store import build_store, get_store
 from service.profiles import PROFILE_PRESETS
+from service.router import _edge_key
+from tests.conftest import make_edge
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_PATH = Path(
@@ -68,6 +70,14 @@ def client(api_store):
 def _origin_point(store):
     """A lat/lon that snaps to node 'O' (used as the origin in most tests)."""
     x, y = store.graph.nodes["O"]["x"], store.graph.nodes["O"]["y"]
+    lon, lat = store._to_wgs84.transform(x, y)
+    return {"lat": lat, "lon": lon}
+
+
+def _point_for(store, node):
+    """A lat/lon that snaps to an arbitrary node (Prompt A's standalone
+    custom-graph tests below, which don't use the shared main_graph/O)."""
+    x, y = store.graph.nodes[node]["x"], store.graph.nodes[node]["y"]
     lon, lat = store._to_wgs84.transform(x, y)
     return {"lat": lat, "lon": lon}
 
@@ -509,3 +519,141 @@ def test_hero_trip_three_profiles_on_real_graph():
     assert dest is not None
     assert dest["building"] == "Goldwin Smith Hall"
     assert dest["access"] == "accessible"
+
+
+# ---------------------------------------------------------------------------
+# Prompt A: always return a route, and say so plainly via `fit` when it had
+# to compromise. Scenarios below build their own small, standalone fixture
+# graphs (not main_graph) so each test is self-contained; main_graph is
+# still used for the "meets everything" and "every listed pair works" cases.
+# ---------------------------------------------------------------------------
+
+
+def test_fastest_route_meeting_everything_has_full_fit(client, api_store):
+    # Fastest's own distance_tolerance is 1.0 and this is its own shortest
+    # route, so the ratio is exactly 1.0 (never exceeds tolerance), and the
+    # stair shortcut has no hard-limit violations for Fastest -- nothing
+    # here should ever make this route anything but "full".
+    body = {
+        "origin": _origin_point(api_store),
+        "destination": {"building": "Goldwin Smith"},
+        "profiles": ["fastest"],
+    }
+    r = client.post("/route", json=body)
+    assert r.status_code == 200, r.text
+    route = r.json()["routes"][0]
+    assert route["fit"] == {"status": "full", "reasons": []}
+
+
+def test_destination_with_only_non_accessible_doors_is_partial_with_door_reason():
+    # A destination whose only entrance is not_accessible: required
+    # accessible entrance must no longer make the whole trip 422 (Prompt A
+    # bug 1) -- it must come back as a route whose fit flags the door.
+    G = nx.Graph()
+    G.add_node("P0")
+    G.add_node(
+        "E_na", access="not_accessible", door_id="DNA", building="NoAccessHall"
+    )
+    G.add_edge("P0", "E_na", **make_edge(length_ft=40.0))
+    G = _with_coordinates(G)
+    store = build_store(G)
+
+    app.dependency_overrides[get_store] = lambda: store
+    try:
+        with TestClient(app) as c:
+            body = {
+                "origin": _point_for(store, "P0"),
+                "destination": {"building": "NoAccessHall"},
+                "profiles": ["wheelchair"],
+            }
+            r = c.post("/route", json=body)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert any("falling back to a non-accessible entrance" in w for w in data["warnings"])
+            route = data["routes"][0]
+            assert route["fit"]["status"] == "partial"
+            assert any("not marked accessible" in reason for reason in route["fit"]["reasons"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_blocked_report_as_only_path_still_returns_a_route_with_warning(monkeypatch):
+    # A reported "remove"-effect edge (e.g. blocked_path) that is the ONLY
+    # path to the destination must not make the trip impossible (Prompt A
+    # bug 2) -- the route comes back using it anyway, flagged clearly.
+    G = nx.Graph()
+    G.add_node("P1")
+    G.add_node("E_only", access="accessible", door_id="DO", building="OnlyPathHall")
+    G.add_edge("P1", "E_only", **make_edge(length_ft=50.0))
+    G = _with_coordinates(G)
+    store = build_store(G)
+
+    blocked_key = _edge_key("P1", "E_only", None)
+    monkeypatch.setattr("service.app.get_active_reports", lambda: [])
+    monkeypatch.setattr("service.app.edge_effects_for", lambda G_, reports: {blocked_key: "remove"})
+
+    app.dependency_overrides[get_store] = lambda: store
+    try:
+        with TestClient(app) as c:
+            body = {
+                "origin": _point_for(store, "P1"),
+                "destination": {"building": "OnlyPathHall"},
+                "profiles": ["fastest"],
+            }
+            r = c.post("/route", json=body)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert "A reported blocked path couldn't be avoided on this trip." in data["warnings"]
+            route = data["routes"][0]
+            assert route["fit"]["status"] == "partial"
+            assert any("blocked path" in reason for reason in route["fit"]["reasons"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_buildings_endpoint_excludes_disconnected_building():
+    # MainHall's component (3 nodes) is strictly larger than IslandHall's
+    # (2 nodes, fully disconnected) -- only MainHall should be listed.
+    G = nx.Graph()
+    G.add_node("P2")
+    G.add_node("M1")
+    G.add_node("E_main", access="accessible", door_id="DM", building="MainHall")
+    G.add_edge("P2", "M1", **make_edge(length_ft=50.0))
+    G.add_edge("M1", "E_main", **make_edge(length_ft=50.0))
+
+    G.add_node("P3")
+    G.add_node("E_iso", access="accessible", door_id="DI", building="IslandHall")
+    G.add_edge("P3", "E_iso", **make_edge(length_ft=50.0))
+
+    G = _with_coordinates(G)
+    store = build_store(G)
+
+    app.dependency_overrides[get_store] = lambda: store
+    try:
+        with TestClient(app) as c:
+            names = c.get("/buildings").json()["buildings"]
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "MainHall" in names
+    assert "IslandHall" not in names
+
+
+def test_every_listed_building_pair_returns_a_route(client, api_store):
+    # Task 4's "last resort" 422 should be unreachable for any pair drawn
+    # from /buildings once task 3's filter is in place -- prove it on the
+    # fixture graph for every ordered pair of its (now all-connected,
+    # all-routable) buildings, under the strictest profile.
+    import itertools
+
+    names = client.get("/buildings").json()["buildings"]
+    assert len(names) >= 2
+    for a, b in itertools.permutations(names, 2):
+        body = {
+            "origin": {"building": a},
+            "destination": {"building": b},
+            "profiles": ["wheelchair"],
+        }
+        r = client.post("/route", json=body)
+        assert r.status_code == 200, f"{a} -> {b}: {r.text}"
+        assert r.json()["routes"]

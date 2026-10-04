@@ -1,8 +1,14 @@
-// Way2Go app (P15): guided step flow + map-first results, built on top of
-// F1's live `priorities` support and P14a's working API-calling logic
-// (see js/api.js).
+// Way2Go app (P15/Prompt B): guided step flow + map-first results, built on
+// top of F1's live `priorities` support and P14a's working API-calling
+// logic (see js/api.js).
+//
+// Prompt B changes: destination/origin are now a building-only picker (no
+// free text, no geolocation), a persistent top-left Back button replaces
+// the old per-step bottom Back buttons, and results show a calm
+// "doesn't fully fit" banner driven by `fit` (falling back to `violations`
+// for older API responses).
 
-import { fetchBuildings, postRoute, buildRequestBody, getCurrentLocation, LocationError } from "./api.js";
+import { fetchBuildings, postRoute, buildRequestBody, LocationError } from "./api.js";
 import { initMap, drawRoutes, clearRoutes, recenterDemoZone } from "./map.js";
 import { init as initAuth } from "./auth.js";
 import { init as initLive } from "./live.js";
@@ -29,13 +35,15 @@ const VIOLATION_CODE_TO_CHIP = {
   curb_cuts: "curb_cuts",
 };
 
+// Popular building shortcuts shown at the top of every picker, filtered
+// down to whichever of these actually exist in GET /buildings.
+const POPULAR_BUILDING_NAMES = ["Goldwin Smith Hall", "Keeton House", "Olin Library"];
+
 const state = {
-  step: 1, // 1..4, or "results"
+  step: 1, // 1..4, "loading", "results", "error", or "results"
   buildings: [],
   destination: "",
-  originMode: "building", // "current" | "building"
   originValue: "",
-  originCoords: null,
   chips: Object.fromEntries(CHIP_IDS.map((id) => [id, { selected: false, level: "essential" }])),
   routes: null, // { recommended, fastest, stepfree }
   selectedCompare: "recommended",
@@ -44,6 +52,11 @@ const state = {
 const mapState = { layers: [], onZoom: null };
 let map = null;
 const routeShownCallbacks = [];
+
+// Tracks whether any building picker is currently open, so the global Esc
+// handler can leave Esc-closes-picker to the picker itself instead of also
+// triggering Back.
+let openPickerCount = 0;
 
 // ---------------------------------------------------------------------------
 // ctx shared with P16/P17 stub modules
@@ -107,6 +120,235 @@ function announce(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Building picker (WAI-ARIA listbox popup pattern)
+// ---------------------------------------------------------------------------
+
+function buildPickerGroups(buildings, excludeName) {
+  const pool = buildings.filter((name) => name !== excludeName);
+  const groups = [];
+
+  const popular = POPULAR_BUILDING_NAMES.filter((name) => pool.includes(name));
+  if (popular.length) {
+    groups.push({ header: "Popular", items: popular });
+  }
+
+  const alphabetical = [...pool].sort((a, b) => a.localeCompare(b));
+  let currentGroup = null;
+  alphabetical.forEach((name) => {
+    const letter = name.charAt(0).toUpperCase();
+    if (!currentGroup || currentGroup.header !== letter) {
+      currentGroup = { header: letter, items: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.items.push(name);
+  });
+
+  return groups;
+}
+
+// Creates one building picker bound to a trigger button + inline panel.
+// `getGroups()` and `getValue()` are called fresh every time the picker
+// opens/re-renders, so callers can keep them reactive to app state (e.g.
+// excluding the chosen destination from the origin picker).
+function createPicker({ trigger, triggerText, panel, listboxEl, getGroups, getValue, onSelect, placeholder }) {
+  let open = false;
+  let flatItems = []; // [{ name, el }]
+  let activeIndex = -1;
+  let typeaheadBuffer = "";
+  let typeaheadTimer = null;
+
+  function renderList() {
+    listboxEl.innerHTML = "";
+    flatItems = [];
+    const groups = getGroups();
+    const selected = getValue();
+
+    groups.forEach((group) => {
+      const header = document.createElement("li");
+      header.className = "picker-group-header";
+      header.textContent = group.header;
+      header.setAttribute("role", "presentation");
+      listboxEl.appendChild(header);
+
+      group.items.forEach((name) => {
+        const li = document.createElement("li");
+        li.className = "picker-row";
+        li.id = `${listboxEl.id}-opt-${flatItems.length}`;
+        li.setAttribute("role", "option");
+        const isSelected = name === selected;
+        li.setAttribute("aria-selected", String(isSelected));
+
+        const check = document.createElement("span");
+        check.className = "picker-row-check";
+        check.setAttribute("aria-hidden", "true");
+        check.textContent = isSelected ? "✓" : "";
+
+        const label = document.createElement("span");
+        label.className = "picker-row-label";
+        label.textContent = name;
+
+        li.append(check, label);
+        li.addEventListener("click", () => selectItem(name));
+        listboxEl.appendChild(li);
+        flatItems.push({ name, el: li });
+      });
+    });
+
+    const selectedIndex = flatItems.findIndex((item) => item.name === selected);
+    setActive(selectedIndex >= 0 ? selectedIndex : flatItems.length ? 0 : -1, { scroll: false });
+  }
+
+  function setActive(index, { scroll = true } = {}) {
+    if (activeIndex >= 0 && flatItems[activeIndex]) {
+      flatItems[activeIndex].el.classList.remove("is-active");
+    }
+    activeIndex = index;
+    if (activeIndex >= 0 && flatItems[activeIndex]) {
+      const el = flatItems[activeIndex].el;
+      el.classList.add("is-active");
+      listboxEl.setAttribute("aria-activedescendant", el.id);
+      if (scroll) el.scrollIntoView({ block: "nearest" });
+    } else {
+      listboxEl.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function selectItem(name) {
+    onSelect(name);
+    close({ focusTrigger: true });
+  }
+
+  function handleOutsideClick(ev) {
+    if (trigger.contains(ev.target) || panel.contains(ev.target)) return;
+    close();
+  }
+
+  function openPicker() {
+    if (open) return;
+    open = true;
+    openPickerCount += 1;
+    renderList();
+    trigger.setAttribute("aria-expanded", "true");
+    panel.classList.add("is-open");
+    panel.setAttribute("aria-hidden", "false");
+    listboxEl.focus();
+    document.addEventListener("click", handleOutsideClick);
+  }
+
+  function close({ focusTrigger = false } = {}) {
+    if (!open) return;
+    open = false;
+    openPickerCount = Math.max(0, openPickerCount - 1);
+    trigger.setAttribute("aria-expanded", "false");
+    panel.classList.remove("is-open");
+    panel.setAttribute("aria-hidden", "true");
+    document.removeEventListener("click", handleOutsideClick);
+    if (focusTrigger) trigger.focus();
+  }
+
+  function toggle() {
+    if (open) close({ focusTrigger: true });
+    else openPicker();
+  }
+
+  function typeahead(char) {
+    clearTimeout(typeaheadTimer);
+    typeaheadBuffer += char.toLowerCase();
+    const match = flatItems.findIndex((item) => item.name.toLowerCase().startsWith(typeaheadBuffer));
+    if (match >= 0) setActive(match);
+    typeaheadTimer = setTimeout(() => {
+      typeaheadBuffer = "";
+    }, 600);
+  }
+
+  trigger.addEventListener("click", toggle);
+  trigger.addEventListener("keydown", (ev) => {
+    if (["ArrowDown", "ArrowUp", "Enter", " "].includes(ev.key)) {
+      ev.preventDefault();
+      openPicker();
+    }
+  });
+
+  listboxEl.addEventListener("keydown", (ev) => {
+    switch (ev.key) {
+      case "ArrowDown":
+        ev.preventDefault();
+        if (flatItems.length) setActive(Math.min(activeIndex + 1, flatItems.length - 1));
+        break;
+      case "ArrowUp":
+        ev.preventDefault();
+        if (flatItems.length) setActive(Math.max(activeIndex - 1, 0));
+        break;
+      case "Home":
+        ev.preventDefault();
+        if (flatItems.length) setActive(0);
+        break;
+      case "End":
+        ev.preventDefault();
+        if (flatItems.length) setActive(flatItems.length - 1);
+        break;
+      case "Enter":
+        ev.preventDefault();
+        if (activeIndex >= 0 && flatItems[activeIndex]) selectItem(flatItems[activeIndex].name);
+        break;
+      case "Escape":
+        ev.preventDefault();
+        ev.stopPropagation();
+        close({ focusTrigger: true });
+        break;
+      case "Tab":
+        close();
+        break;
+      default:
+        if (ev.key.length === 1 && /\S/.test(ev.key)) {
+          typeahead(ev.key);
+        }
+        break;
+    }
+  });
+
+  function setDisplay(name) {
+    triggerText.textContent = name || placeholder;
+    triggerText.classList.toggle("is-placeholder", !name);
+  }
+
+  return { open: openPicker, close, toggle, setDisplay, renderList };
+}
+
+// ---------------------------------------------------------------------------
+// Top-left Back button
+// ---------------------------------------------------------------------------
+
+function updateBackButton() {
+  const btn = document.getElementById("back-btn");
+  if (!btn) return;
+  const showable = (typeof state.step === "number" && state.step > 1) || state.step === "results";
+  btn.hidden = !showable;
+}
+
+function focusStepHeading() {
+  const heading = document.getElementById("step-heading");
+  if (heading) heading.focus();
+}
+
+function goBack() {
+  let target = null;
+  if (state.step === 2) target = 1;
+  else if (state.step === 3) target = 2;
+  else if (state.step === 4) target = 3;
+  else if (state.step === "results") target = 3; // keeps chip/importance choices
+  if (target === null) return;
+  goToStep(target, { focusHeading: true });
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape") return;
+  if (openPickerCount > 0) return; // the open picker handles its own Escape
+  const btn = document.getElementById("back-btn");
+  if (btn && !btn.hidden) goBack();
+});
+
+// ---------------------------------------------------------------------------
 // Step progress dots
 // ---------------------------------------------------------------------------
 
@@ -114,6 +356,7 @@ function renderStepProgress() {
   const progress = document.getElementById("step-progress");
   const isStepScreen = typeof state.step === "number";
   progress.hidden = !isStepScreen;
+  updateBackButton();
   if (!isStepScreen) return;
   progress.querySelectorAll(".progress-dot").forEach((dot) => {
     const n = Number(dot.dataset.step);
@@ -123,21 +366,13 @@ function renderStepProgress() {
 }
 
 // ---------------------------------------------------------------------------
-// Step-action buttons (shared layout; content differs per step)
+// Step-action buttons (shared layout; content differs per step). Back now
+// lives in the persistent top-left button, so this is just Continue/Skip.
 // ---------------------------------------------------------------------------
 
-function renderStepActions(container, { showBack, showSkip, continueLabel, onBack, onSkip, onContinue, continueDisabled, continuePrimary }) {
+function renderStepActions(container, { showSkip, continueLabel, onSkip, onContinue, continueDisabled, continuePrimary }) {
   const actions = document.createElement("div");
   actions.className = "step-actions";
-
-  if (showBack) {
-    const back = document.createElement("button");
-    back.type = "button";
-    back.className = "choice-button";
-    back.textContent = "Back";
-    back.addEventListener("click", onBack);
-    actions.appendChild(back);
-  }
 
   const rightGroup = document.createElement("div");
   rightGroup.style.display = "flex";
@@ -155,7 +390,7 @@ function renderStepActions(container, { showBack, showSkip, continueLabel, onBac
 
   const cont = document.createElement("button");
   cont.type = "button";
-  cont.className = continuePrimary || !showBack ? "primary-button" : "choice-button";
+  cont.className = continuePrimary ? "primary-button" : "choice-button";
   cont.textContent = continueLabel || "Continue";
   cont.disabled = Boolean(continueDisabled);
   cont.addEventListener("click", onContinue);
@@ -170,129 +405,126 @@ function renderStepActions(container, { showBack, showSkip, continueLabel, onBac
 // Step 1: destination
 // ---------------------------------------------------------------------------
 
-function renderStep1() {
+function renderStep1(options = {}) {
   const content = document.getElementById("step-content");
   content.innerHTML = "";
   content.appendChild(document.getElementById("tpl-step-destination").content.cloneNode(true));
 
-  const input = document.getElementById("destination-input");
-  const hint = document.getElementById("destination-hint");
-  input.value = state.destination;
+  const trigger = document.getElementById("destination-picker-trigger");
+  const triggerText = document.getElementById("destination-picker-text");
+  const panel = document.getElementById("destination-picker-panel");
+  const listboxEl = document.getElementById("destination-picker-listbox");
+  // auth.js's saved-places "fillDestination" sets this element's `.value`
+  // and dispatches an "input" event on it; kept for that contract even
+  // though it's no longer a visible text field.
+  const hiddenInput = document.getElementById("destination-input");
 
-  function updateHint() {
-    const value = input.value.trim();
-    if (!value) {
-      hint.textContent = "";
-      return;
-    }
-    const matches = state.buildings.some((b) => b.toLowerCase().includes(value.toLowerCase()));
-    hint.textContent = matches ? "" : "No matching building yet -- check the spelling, or keep typing.";
+  let continueBtn;
+
+  function applySelection(name) {
+    state.destination = name || "";
+    picker.setDisplay(state.destination);
+    hiddenInput.value = state.destination;
+    if (continueBtn) continueBtn.disabled = !state.destination;
   }
 
-  const continueBtn = renderStepActions(content, {
-    showBack: false,
-    continueLabel: "Continue",
-    continueDisabled: !state.destination.trim(),
-    onContinue: () => {
-      state.destination = input.value.trim();
-      goToStep(2);
-    },
+  const picker = createPicker({
+    trigger,
+    triggerText,
+    panel,
+    listboxEl,
+    placeholder: "Choose a building",
+    getGroups: () => buildPickerGroups(state.buildings, null),
+    getValue: () => state.destination,
+    onSelect: (name) => applySelection(name),
   });
 
-  input.addEventListener("input", () => {
-    continueBtn.disabled = !input.value.trim();
-    updateHint();
-  });
-  updateHint();
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && input.value.trim()) {
-      state.destination = input.value.trim();
-      goToStep(2);
+  applySelection(state.destination);
+
+  hiddenInput.addEventListener("input", () => {
+    const name = hiddenInput.value;
+    if (name && state.buildings.includes(name)) {
+      applySelection(name);
     }
   });
 
-  input.focus();
-  announce("Where to? Type a building name.");
+  continueBtn = renderStepActions(content, {
+    continueLabel: "Continue",
+    continueDisabled: !state.destination,
+    onContinue: () => goToStep(2),
+  });
+
+  if (options.focusHeading) {
+    focusStepHeading();
+  } else {
+    trigger.focus();
+  }
+  announce("Where to? Choose a building.");
 }
 
 // ---------------------------------------------------------------------------
 // Step 2: origin
 // ---------------------------------------------------------------------------
 
-function renderStep2() {
+function renderStep2(options = {}) {
   const content = document.getElementById("step-content");
   content.innerHTML = "";
   content.appendChild(document.getElementById("tpl-step-origin").content.cloneNode(true));
 
-  const useLocationBtn = document.getElementById("origin-use-location");
-  const useBuildingBtn = document.getElementById("origin-use-building");
-  const note = document.getElementById("geolocation-note");
-  const buildingField = document.getElementById("origin-building-field");
-  const originInput = document.getElementById("origin-input");
+  const trigger = document.getElementById("origin-picker-trigger");
+  const triggerText = document.getElementById("origin-picker-text");
+  const panel = document.getElementById("origin-picker-panel");
+  const listboxEl = document.getElementById("origin-picker-listbox");
   const errorEl = document.getElementById("origin-error");
 
-  originInput.value = state.originValue;
-
-  function applyMode() {
-    useLocationBtn.setAttribute("aria-pressed", String(state.originMode === "current"));
-    useBuildingBtn.setAttribute("aria-pressed", String(state.originMode === "building"));
-    note.hidden = state.originMode !== "current";
-    buildingField.hidden = state.originMode !== "building";
-    updateContinueState();
-  }
-
   let continueBtn;
-  function updateContinueState() {
-    if (!continueBtn) return;
-    const ready = state.originMode === "current" || Boolean(originInput.value.trim());
-    continueBtn.disabled = !ready;
+
+  function applySelection(name) {
+    state.originValue = name || "";
+    picker.setDisplay(state.originValue);
+    if (continueBtn) continueBtn.disabled = !state.originValue;
   }
 
-  useLocationBtn.addEventListener("click", () => {
-    state.originMode = "current";
-    applyMode();
+  const picker = createPicker({
+    trigger,
+    triggerText,
+    panel,
+    listboxEl,
+    placeholder: "Choose a building",
+    getGroups: () => buildPickerGroups(state.buildings, state.destination),
+    getValue: () => state.originValue,
+    onSelect: (name) => applySelection(name),
   });
-  useBuildingBtn.addEventListener("click", () => {
-    state.originMode = "building";
-    applyMode();
-    originInput.focus();
-  });
-  originInput.addEventListener("input", () => {
-    state.originValue = originInput.value;
-    updateContinueState();
-  });
+
+  // The origin picker excludes the chosen destination; if a previously
+  // selected origin happens to equal it (stale state), clear it.
+  if (state.originValue === state.destination) {
+    state.originValue = "";
+  }
+  applySelection(state.originValue);
 
   continueBtn = renderStepActions(content, {
-    showBack: true,
     continueLabel: "Continue",
-    onBack: () => goToStep(1),
-    onContinue: async () => {
+    continueDisabled: !state.originValue,
+    onContinue: () => {
       errorEl.hidden = true;
-      if (state.originMode === "current") {
-        try {
-          state.originCoords = await getCurrentLocation();
-        } catch (e) {
-          errorEl.textContent = "We couldn't get your location. Try choosing a building instead.";
-          errorEl.hidden = false;
-          return;
-        }
-      } else {
-        state.originValue = originInput.value.trim();
-        state.originCoords = null;
-      }
       goToStep(3);
     },
   });
 
-  applyMode();
-  announce("Starting from. Use your location, or choose a building.");
+  if (options.focusHeading) {
+    focusStepHeading();
+  } else {
+    trigger.focus();
+  }
+  announce("Starting from. Choose a building.");
 }
 
 // ---------------------------------------------------------------------------
 // Step 3: chips
 // ---------------------------------------------------------------------------
 
-function renderStep3() {
+function renderStep3(options = {}) {
   const content = document.getElementById("step-content");
   content.innerHTML = "";
   content.appendChild(document.getElementById("tpl-step-chips").content.cloneNode(true));
@@ -317,10 +549,8 @@ function renderStep3() {
   });
 
   renderStepActions(content, {
-    showBack: true,
     showSkip: true,
     continueLabel: "Continue",
-    onBack: () => goToStep(2),
     onSkip: () => {
       CHIP_IDS.forEach((id) => (state.chips[id].selected = false));
       goToStep(4);
@@ -328,6 +558,7 @@ function renderStep3() {
     onContinue: () => goToStep(4),
   });
 
+  if (options.focusHeading) focusStepHeading();
   announce("Anything we should avoid? Select any that apply, or skip.");
 }
 
@@ -335,7 +566,7 @@ function renderStep3() {
 // Step 4: importance
 // ---------------------------------------------------------------------------
 
-function renderStep4() {
+function renderStep4(options = {}) {
   const content = document.getElementById("step-content");
   content.innerHTML = "";
   content.appendChild(document.getElementById("tpl-step-importance").content.cloneNode(true));
@@ -365,16 +596,15 @@ function renderStep4() {
   });
 
   renderStepActions(content, {
-    showBack: true,
     continuePrimary: true,
     continueLabel: "Find my route",
-    onBack: () => goToStep(3),
     onContinue: () => {
       savePreferences(state.chips);
       findRoute();
     },
   });
 
+  if (options.focusHeading) focusStepHeading();
   announce("How much does each one matter?");
 }
 
@@ -415,7 +645,6 @@ function destinationLocation() {
 }
 
 function originLocation() {
-  if (state.originMode === "current" && state.originCoords) return state.originCoords;
   return { building: state.originValue };
 }
 
@@ -429,6 +658,11 @@ async function findRoute() {
   const prefs = priorities();
 
   try {
+    // A successful response -- even one describing a route that doesn't
+    // fully fit the user's preferences (`fit.status === "partial"`, or
+    // legacy `violations`) -- is still a normal result, never routed to
+    // the error screen. Only network/server failures land in the catch
+    // block below.
     const [recommended, fastest, stepfree] = await Promise.all([
       postRoute(buildRequestBody("recommended", origin, destination, prefs)),
       postRoute(buildRequestBody("fastest", origin, destination, prefs)),
@@ -443,16 +677,10 @@ async function findRoute() {
     state.step = "error";
     renderStepProgress();
     let message = "Something went wrong finding a route. Please try again.";
-    let retryStep = 1;
     if (e instanceof LocationError) {
-      if (/m from the nearest path node/.test(e.message)) {
-        message = "You're outside the mapped area. Choose a starting building.";
-        retryStep = 2;
-      } else {
-        message = "We couldn't find that building. Try another name.";
-      }
+      message = "We couldn't find that building. Try choosing another one.";
     }
-    renderError(message, () => goToStep(retryStep));
+    renderError(message, () => goToStep(1));
   }
 }
 
@@ -563,14 +791,17 @@ function renderSelectedRoute() {
   document.getElementById("show-details-btn").setAttribute("aria-expanded", "false");
   document.getElementById("show-details-btn").textContent = "More details";
 
-  renderNoPerfectRoute(response, route);
+  const fitInfo = renderFitBanner(response, route);
   renderCompareStats();
   drawRoutes(map, mapState, state.routes, key);
 
-  announce(
+  let announceText =
     `Recommended for you: ${stats.est_time_min.toFixed(1)} minutes, ${Math.round(stats.distance_ft)} feet, ` +
-      `${stats.steps_avoided} stairs avoided.`
-  );
+    `${stats.steps_avoided} stairs avoided.`;
+  if (fitInfo.isPartial) {
+    announceText += ` This route doesn't fully fit your preferences: ${fitInfo.reasons.join(". ")}`;
+  }
+  announce(announceText);
 }
 
 function renderCompareStats() {
@@ -589,52 +820,64 @@ function renderCompareStats() {
   });
 }
 
-function renderNoPerfectRoute(fullResponse, route) {
-  const banner = document.getElementById("no-perfect-route-banner");
-  const list = document.getElementById("compromise-list");
+// Builds the "doesn't fully fit" banner for the currently displayed route.
+// Prefers the live `fit` field (`{status: "ok"|"partial", reasons: [...]}`);
+// falls back to the older `violations`/`warnings` shape when `fit` is
+// absent, so this keeps working against an API that hasn't landed the
+// `fit` field yet. Returns { isPartial, reasons } for the caller's
+// aria-live announcement.
+function renderFitBanner(fullResponse, route) {
+  const banner = document.getElementById("fit-banner");
+  const list = document.getElementById("fit-reasons-list");
   list.innerHTML = "";
 
-  const compromises = [];
-  (route.violations || []).forEach((v) => {
-    const chipId = VIOLATION_CODE_TO_CHIP[v.code];
-    const label = chipId ? CHIP_LABEL[chipId] : "A route standard";
-    const isEssential = chipId && state.chips[chipId].selected && state.chips[chipId].level === "essential";
-    compromises.push({ text: `${label}: ${v.message}`, essential: isEssential });
-  });
-  (fullResponse.warnings || []).forEach((w) => {
-    if (w.includes("accessible entrance")) {
-      compromises.push({
-        text: `Accessible entrances: ${w}`,
-        essential: state.chips.accessible_entrance.selected && state.chips.accessible_entrance.level === "essential",
-      });
-    } else if (w.includes("distance tolerance")) {
-      compromises.push({ text: w, essential: false });
-    }
-  });
+  let isPartial = false;
+  let reasons = [];
 
-  if (compromises.length === 0) {
-    banner.hidden = true;
-    return;
+  if (route.fit && typeof route.fit.status === "string") {
+    isPartial = route.fit.status === "partial";
+    reasons = Array.isArray(route.fit.reasons) ? route.fit.reasons : [];
+  } else {
+    // Fallback for an API response with no `fit` field: build the same
+    // banner out of `violations` (hard-limit misses) and the subset of
+    // `warnings` that describe a compromise (entrance access, distance
+    // tolerance), same logic the earlier "no perfect route" banner used.
+    (route.violations || []).forEach((v) => {
+      const chipId = VIOLATION_CODE_TO_CHIP[v.code];
+      const label = chipId ? CHIP_LABEL[chipId] : "A route standard";
+      reasons.push(`${label}: ${v.message}`);
+    });
+    (fullResponse.warnings || []).forEach((w) => {
+      if (w.includes("accessible entrance") || w.includes("distance tolerance")) {
+        reasons.push(w);
+      }
+    });
+    isPartial = reasons.length > 0;
   }
-  compromises.sort((a, b) => (b.essential ? 1 : 0) - (a.essential ? 1 : 0));
-  compromises.forEach((c) => {
+
+  if (!isPartial || reasons.length === 0) {
+    banner.hidden = true;
+    return { isPartial: false, reasons: [] };
+  }
+
+  reasons.forEach((reason) => {
     const li = document.createElement("li");
-    li.textContent = c.text;
-    if (c.essential) li.style.fontWeight = "700";
+    li.textContent = reason;
     list.appendChild(li);
   });
   banner.hidden = false;
+  return { isPartial: true, reasons };
 }
 
 // ---------------------------------------------------------------------------
 // Step router
 // ---------------------------------------------------------------------------
 
-function goToStep(n) {
+function goToStep(n, options = {}) {
   state.step = n;
   renderStepProgress();
   const renderers = { 1: renderStep1, 2: renderStep2, 3: renderStep3, 4: renderStep4 };
-  renderers[n]();
+  renderers[n](options);
 }
 
 // ---------------------------------------------------------------------------
@@ -668,19 +911,18 @@ function wireSheetExpand() {
   });
 }
 
+function wireBackButton() {
+  const btn = document.getElementById("back-btn");
+  btn.addEventListener("click", goBack);
+}
+
 // ---------------------------------------------------------------------------
-// Buildings typeahead data
+// Buildings data (no more <datalist> -- the picker reads state.buildings
+// directly)
 // ---------------------------------------------------------------------------
 
 async function loadBuildingsList() {
   state.buildings = await fetchBuildings();
-  const datalist = document.getElementById("buildings-list");
-  datalist.innerHTML = "";
-  state.buildings.forEach((name) => {
-    const option = document.createElement("option");
-    option.value = name;
-    datalist.appendChild(option);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -691,6 +933,7 @@ async function init() {
   map = initMap("map");
   wireTextSize();
   wireSheetExpand();
+  wireBackButton();
   await loadBuildingsList();
   goToStep(1);
 
