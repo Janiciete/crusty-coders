@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+import networkx as nx
 import pytest
 
 from service.conditions import Conditions, get_conditions
@@ -115,11 +116,65 @@ def test_estimated_slope_not_hard_blocked_but_costs_more():
         length_ft=100.0, slope_pct=4.0, slope_source="cornell_survey"
     )
 
+    # 9% is below ESTIMATED_SLOPE_HARD_PCT (10.0), so still only a penalty.
     assert hard_limit_violations(attrs_estimated_9, prefs) == []
 
     cost_estimated = edge_cost(attrs_estimated_9, prefs, conditions, dark_threshold=0.0)
     cost_surveyed = edge_cost(attrs_surveyed_4, prefs, conditions, dark_threshold=0.0)
     assert cost_estimated > cost_surveyed
+
+
+# ---------------------------------------------------------------------------
+# P4-fix2: estimated (lidar) slopes above ESTIMATED_SLOPE_HARD_PCT (10.0%)
+# are hard-blocked for profiles whose own max_slope_pct is <= that threshold
+# (wheelchair); estimated slopes at/under it keep the existing heavy penalty
+# only; profiles with no hard slope limit (e.g. fastest) are unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_estimated_12_percent_blocks_wheelchair():
+    prefs = PROFILE_PRESETS["wheelchair"]
+    attrs_estimated_12 = make_edge(slope_pct=12.0, slope_source="usgs_lidar_1m_estimate")
+    assert "slope_over_max_estimated" in hard_limit_violations(attrs_estimated_12, prefs)
+
+
+def test_estimated_8_percent_penalized_not_blocked_for_wheelchair():
+    prefs = PROFILE_PRESETS["wheelchair"]
+    conditions = Conditions()
+
+    attrs_estimated_8 = make_edge(
+        length_ft=100.0, slope_pct=8.0, slope_source="usgs_lidar_1m_estimate"
+    )
+    attrs_surveyed_2 = make_edge(
+        length_ft=100.0, slope_pct=2.0, slope_source="cornell_survey"
+    )
+
+    # Below the 10% hard-block threshold -> no violation, just a heavier cost.
+    assert hard_limit_violations(attrs_estimated_8, prefs) == []
+    cost_estimated = edge_cost(attrs_estimated_8, prefs, conditions, dark_threshold=0.0)
+    cost_surveyed = edge_cost(attrs_surveyed_2, prefs, conditions, dark_threshold=0.0)
+    assert cost_estimated > cost_surveyed
+
+
+def test_estimated_12_percent_does_not_block_fastest():
+    # Fastest has no hard slope limit (max_slope_pct = inf), so the new rule
+    # (which only fires when prefs.max_slope_pct <= ESTIMATED_SLOPE_HARD_PCT)
+    # must never block it.
+    prefs = PROFILE_PRESETS["fastest"]
+    attrs_estimated_12 = make_edge(slope_pct=12.0, slope_source="usgs_lidar_1m_estimate")
+    assert hard_limit_violations(attrs_estimated_12, prefs) == []
+
+
+def test_estimated_12_percent_does_not_affect_surveyed_or_unknown_rules():
+    prefs = PROFILE_PRESETS["wheelchair"]
+    # Surveyed slopes keep their existing (unchanged) hard-limit behavior.
+    attrs_surveyed_12 = make_edge(slope_pct=12.0, slope_source="cornell_survey")
+    assert "slope_over_max" in hard_limit_violations(attrs_surveyed_12, prefs)
+    assert "slope_over_max_estimated" not in hard_limit_violations(attrs_surveyed_12, prefs)
+
+    # "unknown" slopes are still never hard-blocked, even at 12%.
+    attrs_unknown_12 = make_edge(slope_pct=12.0, slope_source="unknown")
+    assert hard_limit_violations(attrs_unknown_12, prefs) == []
 
 
 def test_ice_raises_cost_of_steep_edge():
@@ -264,6 +319,69 @@ def test_remove_effect_forces_detour_over_20_percent(main_graph):
 
     assert "R3" in detoured.node_path
     assert detoured.length_ft > direct.length_ft * 1.2  # >20% longer
+
+
+def test_estimated_12_percent_edge_forces_wheelchair_detour():
+    """A direct, short edge whose lidar-estimated slope is 12% must be
+    unusable for Wheelchair even though it's never been field-surveyed; a
+    compliant (surveyed, gentle) detour is taken instead. Fastest, which has
+    no hard slope limit, still takes the direct edge.
+    """
+    G = nx.Graph()
+    G.add_node("O")
+    G.add_node("D")
+    G.add_node("E_access", access="accessible", door_id="D9", building="Steep Hall")
+
+    G.add_edge(
+        "O",
+        "E_access",
+        **make_edge(length_ft=10.0, slope_pct=12.0, slope_source="usgs_lidar_1m_estimate"),
+    )
+    G.add_edge("O", "D", **make_edge(length_ft=50.0, slope_pct=2.0, slope_source="cornell_survey"))
+    G.add_edge(
+        "D", "E_access", **make_edge(length_ft=50.0, slope_pct=2.0, slope_source="cornell_survey")
+    )
+
+    conditions = Conditions()
+
+    wheelchair_route = find_routes(
+        G, "O", ["E_access"], PROFILE_PRESETS["wheelchair"], conditions, k=1
+    )[0]
+    assert wheelchair_route.used_fallback is False
+    assert wheelchair_route.violations == []
+    assert "D" in wheelchair_route.node_path
+    assert wheelchair_route.length_ft == pytest.approx(100.0)
+
+    fastest_route = find_routes(
+        G, "O", ["E_access"], PROFILE_PRESETS["fastest"], conditions, k=1
+    )[0]
+    assert fastest_route.node_path == ["O", "E_access"]
+    assert fastest_route.length_ft == pytest.approx(10.0)
+
+
+def test_estimated_12_percent_only_route_uses_fallback():
+    """When the estimated-steep edge is the ONLY way to the destination,
+    Wheelchair must fall back and report the violation rather than silently
+    using (or silently refusing) the edge.
+    """
+    G = nx.Graph()
+    G.add_node("O3")
+    G.add_node("E_access7", access="accessible", door_id="D10", building="OnlySteepHall")
+    G.add_edge(
+        "O3",
+        "E_access7",
+        **make_edge(length_ft=40.0, slope_pct=12.0, slope_source="usgs_lidar_1m_estimate"),
+    )
+
+    conditions = Conditions()
+    routes = find_routes(
+        G, "O3", ["E_access7"], PROFILE_PRESETS["wheelchair"], conditions, k=1
+    )
+    assert len(routes) == 1
+    route = routes[0]
+    assert route.used_fallback is True
+    codes = {c for v in route.violations for c in v["codes"]}
+    assert "slope_over_max_estimated" in codes
 
 
 def test_multigraph_support(main_multigraph):

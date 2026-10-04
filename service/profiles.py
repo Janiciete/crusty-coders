@@ -32,6 +32,15 @@ SLOPE_SOURCE_ESTIMATE = "usgs_lidar_1m_estimate"
 # modules (e.g. explain.py) can refer to it by name instead of a bare string.
 SLOPE_SOURCE_UNKNOWN = "unknown"
 
+# [DECISION] (P4-fix2) Lidar-estimated slopes are noisy (~1-2 points) but an
+# estimate this far over the ADA ramp limit is very likely a real barrier,
+# not noise. Above this threshold, an estimated-slope edge is hard-blocked
+# for any profile whose own max_slope_pct is at or below the threshold (i.e.
+# wheelchair); estimated slopes from 5% up to this threshold still only get
+# the existing heavy cost penalty (cost.py), not a hard block. Surveyed-slope
+# hard limits (SLOPE_SOURCE_SURVEYED) and "unknown" handling are unchanged.
+ESTIMATED_SLOPE_HARD_PCT = 10.0
+
 # Surface values that get an extra roughness penalty. Confirmed present in
 # the real final graph (cornell_data/graph/graph.pkl, post-lidar), with
 # total edge length per value: "unknown" (3729 edges / 60862.5 ft),
