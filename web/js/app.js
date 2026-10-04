@@ -8,6 +8,7 @@ import { init as initAuth } from "./auth.js";
 import { init as initLive } from "./live.js";
 import { init as initFacilities } from "./facilities.js";
 import { init as initAi } from "./ai.js";
+import { init as initLayers } from "./layers.js";
 
 const STORAGE_KEY = "way2go_preferences_v2";
 const FONT_SCALE_KEY = "way2go_font_scale_v1";
@@ -697,6 +698,7 @@ async function init() {
   initLive(ctx);
   initFacilities(ctx);
   initAi(ctx);
+  initLayers(ctx);
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -1,2 +1,85 @@
-/* Stub for P17 (AI preferences, optional/stretch). #ai-slot and
-   #facilities-panel are empty and hidden until P17 styles them. */
+/* P17/F5-simple (Stretch, xAI track): "Describe what matters" -> suggested
+   chips. #ai-slot sits inside step 3's template, above the chip grid.
+   Uses the shared tokens from styles.css (no new ones introduced here). */
+
+#ai-slot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background: var(--mist);
+  border-radius: var(--radius-input);
+}
+
+.ai-label {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+
+.ai-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.ai-text-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-input);
+  border: 2px solid var(--mist);
+  background: #fff;
+  border-radius: var(--radius-input);
+  padding: 0 var(--space-3);
+  font-size: var(--fs-base);
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+
+.ai-text-input:focus-visible {
+  border-color: var(--rosewood);
+}
+
+.ai-suggest-btn {
+  flex: 0 0 auto;
+  height: var(--h-btn);
+  background: var(--gradient);
+  border: none;
+  color: var(--ink);
+  border-radius: var(--radius-input);
+  padding: 0 var(--space-4);
+  font-weight: 600;
+  font-size: var(--fs-base);
+}
+
+.ai-suggest-btn:disabled {
+  background: var(--mist);
+  color: rgba(46, 38, 41, 0.5);
+}
+
+.ai-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: rgba(46, 38, 41, 0.75);
+}
+
+.ai-status {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--rosewood);
+}
+
+.ai-status-error {
+  color: var(--rosewood);
+}
+
+/* "Suggested" badge appended inside a lit-up .pill-chip (styles.css). */
+.ai-suggested-badge {
+  margin-left: var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--rosewood);
+  white-space: nowrap;
+}

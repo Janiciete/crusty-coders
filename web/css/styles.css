@@ -1,4 +1,4 @@
-/* Way2Go design tokens (docs/DESIGN.md / shared spec, P15). */
+/* Way2Go design tokens (docs/DESIGN.md / shared spec, P15/S1). */
 :root {
   --cream: #FFF9EC;
   --blush: #FBB1BD;
@@ -10,12 +10,45 @@
 
   --gradient: linear-gradient(135deg, var(--blush), var(--peach));
 
+  /* Fonts: Bricolage Grotesque for display/headings, Atkinson Hyperlegible
+     Next for everything else (S1 token names inferred -- no shared spec
+     block was available this session; chosen to extend, not replace, the
+     existing token set). */
+  --font-display: "Bricolage Grotesque", "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+
+  /* Type scale (rem, so A-/A+ --font-scale keeps scaling everything).
+     Floor is --fs-xs == 14px; nothing in the UI goes below it. */
+  --fs-xs: 0.875rem;    /* 14px -- smallest allowed anywhere (tags, segment labels) */
+  --fs-sm: 0.9375rem;   /* 15px -- body default, hints */
+  --fs-base: 1rem;      /* 16px -- buttons, chips, inputs */
+  --fs-lg: 1.0625rem;   /* 17px -- card titles, headline label */
+  --fs-xl: 1.3125rem;   /* 21px -- reserved mid step in the DESIGN.md scale */
+  --fs-display: 1.75rem; /* 28px/700 -- step question, route minutes, results title */
+
   --font-scale: 1;
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 1rem;
   --space-4: 1.5rem;
   --space-5: 2.5rem;
+
+  /* Sizing tokens (S1): one height per control family so every button,
+     chip, input and icon control matches across the app. */
+  --h-btn: 48px;
+  --h-chip: 48px;
+  --h-input: 48px;
+  --size-icon-btn: 44px;
+
+  /* Spacing scale used for the new S1 work; --space-1..5 above stay as the
+     fine-grained rhythm already used throughout this file. --sp-6 is the
+     single outer gutter the left panel aligns to. */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 1.5rem;
 
   --radius-panel: 20px;
   --radius-input: 14px;
@@ -32,10 +65,27 @@ html {
 body {
   margin: 0;
   color: var(--ink);
-  font-family: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
-  font-size: 15px;
+  font-size: var(--fs-sm);
   overflow: hidden;
+}
+
+h1, h2, h3,
+.step-question,
+.headline-number,
+.panel-title,
+.brand {
+  font-family: var(--font-display);
+}
+
+/* --------------------------------------------------------------------- */
+/* Map tiles: soften the OSM/satellite basemap only (S1); markers, the   */
+/* route ribbon and controls live in other panes and are unaffected.     */
+/* --------------------------------------------------------------------- */
+
+.leaflet-tile-pane {
+  filter: saturate(0.8) brightness(1.03) sepia(0.06);
 }
 
 /* --------------------------------------------------------------------- */
@@ -60,12 +110,12 @@ body {
 }
 
 .map-control-btn {
-  width: 44px;
-  height: 44px;
+  width: var(--size-icon-btn);
+  height: var(--size-icon-btn);
   border: none;
   background: var(--cream);
   color: var(--ink);
-  font-size: 1.1rem;
+  font-size: var(--fs-lg);
   cursor: pointer;
 }
 .map-control-btn:hover {
@@ -108,13 +158,13 @@ body {
 
 button {
   font: inherit;
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--size-icon-btn);
+  min-width: var(--size-icon-btn);
   cursor: pointer;
 }
 input {
   font: inherit;
-  min-height: 44px;
+  min-height: var(--size-icon-btn);
 }
 
 /* --------------------------------------------------------------------- */
@@ -144,7 +194,7 @@ input {
   background: var(--cream);
   border-radius: var(--radius-panel);
   box-shadow: 0 8px 30px rgba(46, 38, 41, 0.18);
-  padding: var(--space-4);
+  padding: var(--sp-6);
   z-index: 5;
   display: flex;
   flex-direction: column;
@@ -156,7 +206,7 @@ input {
 }
 
 .step-question {
-  font-size: 28px;
+  font-size: var(--fs-display);
   font-weight: 700;
   margin: 0 0 var(--space-3);
 }
@@ -167,17 +217,19 @@ input {
 
 .search-input {
   width: 100%;
-  padding: var(--space-3);
+  height: var(--h-input);
+  padding: 0 var(--space-3);
   border: 2px solid var(--mist);
   border-radius: var(--radius-input);
   background: #fff;
   color: var(--ink);
+  font-size: var(--fs-base);
 }
 
 .field-hint {
   color: var(--ink);
   opacity: 0.75;
-  font-size: 0.9rem;
+  font-size: var(--fs-sm);
   margin: var(--space-2) 0 0;
 }
 .field-hint[role="alert"] {
@@ -205,27 +257,32 @@ input {
 /* Buttons                                                                */
 /* --------------------------------------------------------------------- */
 
+/* Secondary button: cream fill, rosewood border, same height as primary. */
 .choice-button {
-  background: #fff;
-  border: 2px solid var(--mist);
+  height: var(--h-btn);
+  background: var(--cream);
+  border: 2px solid var(--rosewood);
   color: var(--ink);
   border-radius: var(--radius-input);
-  padding: var(--space-2) var(--space-3);
+  padding: 0 var(--space-3);
   font-weight: 600;
+  font-size: var(--fs-base);
 }
 .choice-button[aria-pressed="true"] {
   border-color: var(--rosewood);
   background: var(--peach);
 }
 
+/* Primary button: one gradient style, same height token as secondary. */
 .primary-button {
+  height: var(--h-btn);
   background: var(--gradient);
   border: none;
   color: var(--ink);
   border-radius: var(--radius-input);
-  padding: var(--space-3) var(--space-4);
-  font-weight: 700;
-  font-size: 1.05rem;
+  padding: 0 var(--space-4);
+  font-weight: 600;
+  font-size: var(--fs-base);
   width: 100%;
 }
 .primary-button:disabled {
@@ -240,6 +297,7 @@ input {
   color: var(--rosewood);
   text-decoration: underline;
   padding: var(--space-1) 0;
+  font-size: var(--fs-base);
 }
 
 .step-actions {
@@ -272,12 +330,14 @@ input {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
+  height: var(--h-chip);
   text-align: left;
   background: #fff;
   border: 2px solid var(--mist);
   border-radius: 999px;
-  padding: var(--space-3);
+  padding: 0 var(--space-3);
   font-weight: 600;
+  font-size: var(--fs-base);
   color: var(--ink);
 }
 .pill-chip .chip-check {
@@ -303,20 +363,25 @@ input {
 }
 .importance-chip-label {
   font-weight: 600;
+  font-size: var(--fs-base);
   margin: 0 0 var(--space-1);
 }
 
 .segmented-control {
   display: flex;
+  height: var(--h-chip);
   border: 2px solid var(--mist);
   border-radius: 999px;
   overflow: hidden;
 }
 .segmented-control .segment {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: var(--space-2) var(--space-1);
-  font-size: 0.85rem;
+  font-size: var(--fs-xs);
   cursor: pointer;
   position: relative;
 }
@@ -388,11 +453,11 @@ input {
   margin-bottom: var(--space-3);
 }
 .headline-number {
-  font-size: 28px;
+  font-size: var(--fs-display);
   font-weight: 700;
 }
 .headline-label {
-  font-size: 17px;
+  font-size: var(--fs-lg);
 }
 
 .stat-grid {
@@ -402,15 +467,16 @@ input {
   margin: 0 0 var(--space-3);
 }
 .stat-grid dt {
-  font-size: 0.85rem;
+  font-size: var(--fs-xs);
   opacity: 0.75;
 }
 .stat-grid dd {
   margin: 0;
   font-weight: 600;
+  font-size: var(--fs-base);
 }
 .estimated-tag {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
   opacity: 0.75;
   border: 1px solid var(--mist);
@@ -423,7 +489,7 @@ input {
   margin-bottom: var(--space-3);
 }
 .why-card h2 {
-  font-size: 17px;
+  font-size: var(--fs-lg);
   margin: 0 0 var(--space-2);
 }
 .why-card ul {
@@ -439,7 +505,7 @@ input {
   justify-content: space-between;
   gap: var(--space-2);
   margin: 0 0 var(--space-3);
-  font-size: 0.85rem;
+  font-size: var(--fs-xs);
 }
 .compare-stats > div {
   text-align: center;
@@ -450,6 +516,7 @@ input {
 .compare-stats dd {
   margin: 0;
   font-weight: 600;
+  font-size: var(--fs-sm);
 }
 
 .results-actions {
@@ -474,10 +541,13 @@ input {
   gap: var(--space-2);
 }
 .text-size-control button {
+  width: var(--size-icon-btn);
+  height: var(--size-icon-btn);
   border: 2px solid var(--mist);
   background: #fff;
   border-radius: var(--radius-input);
-  padding: var(--space-1) var(--space-2);
+  padding: 0;
+  font-size: var(--fs-sm);
 }
 
 /* --------------------------------------------------------------------- */
@@ -493,7 +563,7 @@ input {
   background: rgba(255, 249, 236, 0.85);
   border-radius: 999px;
   padding: var(--space-1) var(--space-3);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--ink);
   pointer-events: none;
 }

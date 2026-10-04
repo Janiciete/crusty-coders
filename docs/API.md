@@ -195,6 +195,42 @@ Serves `cornell_data/graph/bottlenecks.json` (produced by the Prompt 8 bottlenec
 
 ---
 
+## POST /preferences/parse
+
+Stretch, xAI track (P17/F5-simple). Turns one free-text sentence into suggested preference chips, for the "Describe what matters to you" box above the chips on the preferences step. **This is the only endpoint, and the only UI surface, allowed to say "AI".**
+
+### Request body
+
+```json
+{"text": "Hills are really hard for me and I need lit paths at night"}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `text` | string | yes | 1-300 characters. |
+
+### Response (200)
+
+```json
+{"priorities": {"avoid_steep": "essential", "well_lit": "essential"}}
+```
+
+Only chip ids from the fixed allow-list (`avoid_stairs`, `avoid_steep`, `curb_cuts`, `accessible_entrance`, `well_lit`) with a valid level (`essential`, `important`, `nice`) are ever returned; anything else the model returns is silently dropped before the response leaves the server. The UI applies these to the chips and their importance, then lets the user edit them like any other selection -- xAI never computes a route and this response is never fed directly into `/route`.
+
+### Response (503) -- no key, any xAI error, timeout, or nothing valid in the reply
+
+```json
+{"error": "Suggestions aren't available right now. Choose below."}
+```
+
+The app works fully without this endpoint; it's the only place an `XAI_API_KEY` (and `XAI_MODEL`) is required, and both are optional everywhere else (CLAUDE.md §2).
+
+### Privacy (non-negotiable, team decision)
+
+`text` is sent to xAI **only** when the user presses Suggest -- never on every keystroke, never prefetched. It is **never stored** (not in Supabase, not in `profiles.preferences`, not on disk) and **never logged** by this service, in either direction (request text or the model's reply). The system prompt sent to xAI also instructs it to never name a medical condition, diagnosis, or disability label in its reply; the chip/level allow-list check above is the actual enforcement (the model's wording is never trusted or surfaced as-is). This is disclosed under the text box in the UI: "Your words are sent to xAI to suggest options. Nothing is saved."
+
+---
+
 ## Notes for the UI team
 
 - Never send coordinates in a URL query string; `POST /route` is the only place lat/lon travel, and only in the body.

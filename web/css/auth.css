@@ -1,2 +1,196 @@
-/* Stub for P16 (auth). #auth-slot/#auth-dialog are empty and hidden until
-   P16 styles them. */
+/* Way2Go auth styles (F4 / P16). #auth-slot/#auth-dialog are built and
+   populated entirely by js/auth.js at runtime; this file only styles the
+   classes/ids that module creates. Uses the shared tokens from
+   css/styles.css (--cream, --blush, --peach, --rosewood, --ink, --mist,
+   --space-*, --radius-*); defines no new tokens. */
+
+.auth-pill {
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  background: var(--cream);
+  color: var(--ink);
+  border: 1px solid var(--mist);
+  border-radius: 999px;
+  padding: var(--space-2) var(--space-3);
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.auth-pill:hover {
+  border-color: var(--blush);
+}
+
+.auth-pill:focus-visible {
+  outline: 2px solid var(--rosewood);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--blush);
+}
+
+/* Dialog: a centered modal panel over a dim scrim. */
+.auth-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background: rgba(46, 38, 41, 0.45);
+}
+
+.auth-dialog[hidden] {
+  display: none;
+}
+
+.auth-dialog-panel {
+  position: relative;
+  width: min(360px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--cream);
+  color: var(--ink);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.auth-dialog-panel h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.3125rem;
+  font-weight: 700;
+}
+
+.auth-dialog-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.auth-dialog-close:hover {
+  background: var(--mist);
+}
+
+.auth-dialog-close:focus-visible {
+  outline: 2px solid var(--rosewood);
+  outline-offset: 2px;
+}
+
+.auth-privacy-line {
+  margin: 0 0 var(--space-3);
+  font-size: 0.9375rem;
+  color: var(--ink);
+  opacity: 0.85;
+}
+
+.auth-dialog-panel .field {
+  margin-bottom: var(--space-3);
+}
+
+.auth-dialog-panel label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+#auth-send-link-btn {
+  width: 100%;
+  background: var(--gradient);
+  color: var(--ink);
+  border: none;
+  border-radius: var(--radius-input);
+  padding: var(--space-3);
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+#auth-send-link-btn:focus-visible {
+  outline: 2px solid var(--rosewood);
+  outline-offset: 2px;
+}
+
+#auth-status {
+  margin-top: var(--space-2);
+  min-height: 1.2em;
+}
+
+.auth-menu {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.auth-menu .choice-button {
+  width: 100%;
+  text-align: left;
+}
+
+.auth-danger {
+  color: var(--rosewood);
+}
+
+.auth-saved-places {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.auth-saved-places .choice-button {
+  width: 100%;
+  text-align: left;
+}
+
+.auth-save-place-btn {
+  white-space: nowrap;
+}
+
+/* Toast: brief, non-blocking confirmation (e.g. "Saved place"). */
+.auth-toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translate(-50%, calc(100% + var(--space-4)));
+  background: var(--ink);
+  color: var(--cream);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-input);
+  font-size: 0.9375rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  z-index: 60;
+  pointer-events: none;
+  max-width: calc(100vw - var(--space-4) * 2);
+}
+
+.auth-toast.is-visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-toast {
+    transition: none;
+  }
+}

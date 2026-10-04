@@ -1,6 +1,7 @@
-// Way2Go map rendering (P15): CARTO Positron basemap, the signature
-// gradient-ribbon route, grey dashed/dotted comparison routes, and
-// bottom-right zoom/recenter controls.
+// Way2Go map rendering (P15/S1): OpenStreetMap standard basemap (with an
+// Esri World Imagery satellite toggle), the signature gradient-ribbon
+// route, grey dashed/dotted comparison routes, and bottom-right
+// zoom/recenter/basemap controls.
 
 const DEMO_CENTER = [42.4475, -76.4848]; // CLAUDE.md §6 demo-zone bbox center
 
@@ -14,19 +15,32 @@ const COMPARISON_STYLE = {
 const prefersReducedMotion = () =>
   window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// [VERIFY] (S1): both tile URLs confirmed 200 via curl this session.
+const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const OSM_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const SATELLITE_TILE_URL =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const SATELLITE_ATTRIBUTION =
+  "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
+
 export function initMap(containerId) {
   const map = L.map(containerId, { zoomControl: false }).setView(DEMO_CENTER, 16);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-    maxZoom: 20,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
-      '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+
+  const streetLayer = L.tileLayer(OSM_TILE_URL, {
+    maxZoom: 19,
+    attribution: OSM_ATTRIBUTION,
   }).addTo(map);
-  addMapControls(map);
+  const satelliteLayer = L.tileLayer(SATELLITE_TILE_URL, {
+    maxZoom: 19,
+    attribution: SATELLITE_ATTRIBUTION,
+  });
+
+  addMapControls(map, { streetLayer, satelliteLayer });
   return map;
 }
 
-function addMapControls(map) {
+function addMapControls(map, basemaps) {
   const control = L.control({ position: "bottomright" });
   control.onAdd = () => {
     const div = L.DomUtil.create("div", "map-controls");
@@ -34,11 +48,29 @@ function addMapControls(map) {
       <button type="button" class="map-control-btn" id="map-zoom-in" aria-label="Zoom in">+</button>
       <button type="button" class="map-control-btn" id="map-zoom-out" aria-label="Zoom out">&minus;</button>
       <button type="button" class="map-control-btn" id="map-recenter" aria-label="Recenter map">&#9678;</button>
+      <button type="button" class="map-control-btn" id="map-basemap-toggle" aria-label="Switch to satellite view" aria-pressed="false">&#9733;</button>
     `;
     L.DomEvent.disableClickPropagation(div);
     div.querySelector("#map-zoom-in").addEventListener("click", () => map.zoomIn());
     div.querySelector("#map-zoom-out").addEventListener("click", () => map.zoomOut());
     div.querySelector("#map-recenter").addEventListener("click", () => map.setView(DEMO_CENTER, 16));
+
+    const toggleBtn = div.querySelector("#map-basemap-toggle");
+    let satelliteOn = false;
+    toggleBtn.addEventListener("click", () => {
+      satelliteOn = !satelliteOn;
+      if (satelliteOn) {
+        map.removeLayer(basemaps.streetLayer);
+        basemaps.satelliteLayer.addTo(map);
+        toggleBtn.setAttribute("aria-label", "Switch to map view");
+        toggleBtn.setAttribute("aria-pressed", "true");
+      } else {
+        map.removeLayer(basemaps.satelliteLayer);
+        basemaps.streetLayer.addTo(map);
+        toggleBtn.setAttribute("aria-label", "Switch to satellite view");
+        toggleBtn.setAttribute("aria-pressed", "false");
+      }
+    });
     return div;
   };
   control.addTo(map);

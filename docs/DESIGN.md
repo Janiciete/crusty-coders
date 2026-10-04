@@ -15,9 +15,22 @@
 
 Gradient: `linear-gradient(135deg, var(--blush), var(--peach))`, used only on the primary button, the route halo, and progress dots -- never as a page/panel wash. Text is always `--ink` or `--rosewood`, never blush text on cream.
 
-**Type:** Atkinson Hyperlegible Next (Google Fonts), falling back to "Atkinson Hyperlegible" then `system-ui`. Scale 15/17/21/28px, weights 400/600/700, body line-height 1.5, sentence case everywhere. The step question and the route's minutes are 28px/700.
+**Type (updated S1):** Two families, both Google Fonts, loaded in one request. `--font-display` (Bricolage Grotesque, falling back to Atkinson Hyperlegible Next then `system-ui`) is used for headings (`h1`/`h2`/`h3`), the step question, the panel/card titles ("Why this route?", "Recommended for you"), and the route's minutes (`.headline-number`). `--font-body` (Atkinson Hyperlegible Next, falling back to "Atkinson Hyperlegible" then `system-ui`) is everything else -- buttons, chips, inputs, hints, stats. Both stay sentence case; no letter-spacing tricks on display text. Scale is now a token set on `:root` instead of mixed px/rem:
 
-**Layout (desktop ≥720px):** a 400px-wide floating left panel, cream, 20px radius, one soft shadow, 16px from the top/left edges, over a full-bleed map. Under 720px: the panel becomes a bottom sheet (peek/half/full) with a drag handle and keyboard-operable expand button. Radius by hierarchy: panel 20px, inputs 14px, chips fully rounded, map controls fully round. Basemap: CARTO Positron light.
+| Token | Size | Use |
+|---|---|---|
+| `--fs-xs` | 14px (0.875rem) | floor -- estimated-tag, segmented-control labels, stat labels |
+| `--fs-sm` | 15px (0.9375rem) | body default, field hints, compare-stat values |
+| `--fs-base` | 16px (1rem) | buttons, chips, inputs, importance labels |
+| `--fs-lg` | 17px (1.0625rem) | card titles, headline label, map-control icon glyphs |
+| `--fs-xl` | 21px (1.3125rem) | reserved -- no current element sits at this step in the scale |
+| `--fs-display` | 28px (1.75rem), weight 700 | step question, route minutes, results title |
+
+Weights stay 400/600/700, body line-height 1.5. `--font-scale` on `:root` (via `html { font-size: calc(100% * var(--font-scale)) }`) still drives the A−/A+ control; every size above is in `rem` so it scales with it.
+
+**Sizing (new, S1):** one height token per control family -- `--h-btn` (48px, primary and secondary buttons), `--h-chip` (48px, pill chips and segmented-control rows), `--h-input` (48px, text inputs), `--size-icon-btn` (44px, map controls and the A−/A+ buttons). All exceed the 44px tap-target minimum. `--sp-1..5` (0.25/0.5/1/1.5/2.5rem, unchanged from P15) remain the fine-grained internal rhythm (gaps, stack margins); `--sp-6` (1.5rem) is the one outer gutter the left panel's padding uses, so the panel keeps a single consistent edge instead of mixed paddings. [Note: the shared S1 spec block that was meant to define these exact token names/values wasn't available when this pass ran; the set above was inferred to be consistent with the existing `--cream`/`--blush`/`--peach`/`--rosewood`/`--ink`/`--mist`/`--space-*` tokens already in this file and `styles.css`, and should be reconciled against the original spec if it turns up.]
+
+**Layout (desktop ≥720px):** a 400px-wide floating left panel, cream, 20px radius, one soft shadow, 16px from the top/left edges, over a full-bleed map. Under 720px: the panel becomes a bottom sheet (peek/half/full) with a drag handle and keyboard-operable expand button. Radius by hierarchy: panel 20px, inputs 14px, chips fully rounded, map controls fully round. **Basemap (updated S1): OpenStreetMap standard tiles** (`tile.openstreetmap.org`), softened with a `saturate(.8) brightness(1.03) sepia(.06)` CSS filter on `.leaflet-tile-pane` only (markers, the route ribbon and controls are in other Leaflet panes and are unaffected). A bottom-right "Map / Satellite" toggle swaps to Esri World Imagery tiles (`server.arcgisonline.com/.../World_Imagery/MapServer`) and back; replaces the earlier CARTO Positron basemap, which now serves an "API keys required" placeholder from carto.com and is no longer usable.
 
 **The route:** a 12px halo stroke (SVG `linearGradient`, blush→peach, positioned in screen space, updated on zoom), a 4px rosewood core line on top, a rosewood ring (start) and door-pin (end) marker, one ~600ms stroke-dashoffset draw-on (skipped under `prefers-reduced-motion`). Comparison routes stay grey (`#9A8F93`), dashed (Fastest) or dotted (Step-free), until selected.
 
@@ -25,8 +38,10 @@ Gradient: `linear-gradient(135deg, var(--blush), var(--peach))`, used only on th
 
 ## [VERIFY] checks (run live before building)
 
-- **Font:** `fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap` → **200**. Confirmed available; loaded directly (the "Atkinson Hyperlegible" / `system-ui` fallback chain in the CSS stack is defense-in-depth, not because the Next family is missing).
-- **Basemap:** `https://{a,b}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` → **200**. Attribution used: "© OpenStreetMap contributors © CARTO".
+- **Font (S1):** `fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap` → **200** (curl, this session). Both families load in one request; the "Atkinson Hyperlegible" / `system-ui` fallback chains are defense-in-depth.
+- **Basemap (S1, superseded):** the P15 CARTO Positron URL (`{a,b}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png`) now serves an "API keys required" placeholder from carto.com -- no longer usable. Replaced with:
+  - OSM standard tiles: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` → **200** (curl, this session). Attribution: "© OpenStreetMap contributors".
+  - Esri World Imagery (satellite toggle): `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` → **200** (curl, this session). Attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community". [VERIFY] this exact attribution string against Esri's current terms before a public (non-demo) deploy -- it's the commonly published text but wasn't independently re-confirmed beyond the tile request succeeding.
 - **Contrast:** `--rosewood #A8445A` on `--cream #FFF9EC` ≈ 4.7:1 (passes 4.5:1 for body text); `--ink #2E2629` on cream ≈ 13:1. Neither token needed darkening.
 
 ## Step 0 live-backend check (hero trip, run against the real graph)

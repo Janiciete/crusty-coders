@@ -26,6 +26,7 @@ load_dotenv()  # stack list (CLAUDE.md §2) names python-dotenv for the routing
 # service.app:app`), so it's the one place that should load .env -- no other
 # service module does this (they just read os.getenv directly).
 
+from service import ai as ai_module
 from service import explain, reports as reports_module
 from service.conditions import get_conditions
 from service.graph_store import (
@@ -34,6 +35,7 @@ from service.graph_store import (
     GraphStore,
     get_store,
 )
+from service.layers import router as layers_router
 from service.profiles import PROFILE_PRESETS, resolve_preferences
 from service.reports import edge_effects_for, get_active_reports, report_edges
 from service.router import find_routes
@@ -52,6 +54,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(layers_router)
+app.include_router(ai_module.router)
 
 
 # ---------------------------------------------------------------------------
