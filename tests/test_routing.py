@@ -8,6 +8,7 @@ Acceptance criteria are drawn from the P3 prompt; see docs/project_plan.md
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 import pytest
 
@@ -25,15 +26,22 @@ from tests.conftest import make_edge
 
 
 def test_conditions_stub_on_off_auto():
-    c = get_conditions({"darkness": "on", "ice": "off"})
+    # P7 note: get_conditions() now does real astral/NWS work for "auto"
+    # (see tests/test_conditions.py for full coverage of that). This test
+    # predates P7 and only checks override plumbing, so it pins `now` to a
+    # known daytime moment and forces ice="off" to stay network-free, per
+    # CLAUDE.md's "no real network in tests" rule.
+    noon = datetime(2026, 10, 4, 12, 0, 0)
+
+    c = get_conditions({"darkness": "on", "ice": "off"}, now=noon)
     assert c.darkness is True
     assert c.ice is False
 
-    c2 = get_conditions({})
+    c2 = get_conditions({"ice": "off"}, now=noon)
     assert c2.darkness is False
     assert c2.ice is False
 
-    c3 = get_conditions({"darkness": "auto"})
+    c3 = get_conditions({"darkness": "auto", "ice": "off"}, now=noon)
     assert c3.darkness is False
 
 

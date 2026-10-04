@@ -9,4 +9,5 @@ httpx==0.28.1
 python-dotenv==1.2.4
 supabase==2.32.0
 astral==3.2
+pyproj==3.8.0
 pytest==9.1.1
