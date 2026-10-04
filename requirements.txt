@@ -1,0 +1,12 @@
+geopandas==1.2.0
+shapely==2.1.2
+networkx==3.7
+pandas==3.0.6
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+pydantic==2.13.5
+httpx==0.28.1
+python-dotenv==1.2.4
+supabase==2.32.0
+astral==3.2
+pytest==9.1.1

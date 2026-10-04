@@ -93,7 +93,7 @@ Other endpoints: `GET /health`, `GET /profiles` (defaults), `GET /conditions`, `
 8. Finish with: files changed · test results · deviations and why · assumptions · open questions. Then update Status below.
 
 ## 9. Status
-- [ ] Prompt 0: repo setup (structure, .env.example, .gitignore, requirements.txt, smoke test)
+- [x] Prompt 0: repo setup (structure, .env.example, .gitignore, requirements.txt, smoke test)
 - [ ] Prompts 1–N: filled in after roadmap approval
 
 **Known issues** (append; mark resolved with date/time)
