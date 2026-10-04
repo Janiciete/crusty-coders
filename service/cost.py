@@ -11,6 +11,7 @@ import math
 
 from service.conditions import Conditions
 from service.profiles import (
+    ESTIMATED_SLOPE_HARD_PCT,
     PENALTY_WEIGHTS,
     ROUGH_SURFACES,
     SLOPE_SOURCE_ESTIMATE,
@@ -22,10 +23,16 @@ from service.profiles import (
 def hard_limit_violations(attrs: dict, prefs: ResolvedPrefs) -> list[str]:
     """Return the hard-limit violation codes an edge trips for these prefs.
 
-    Codes: "stairs", "slope_over_max", "slope_needs_ramp", "curb_cuts",
-    "width". Slope limits apply only to surveyed slopes (slope_source ==
-    "cornell_survey"); estimated/unknown slopes are never hard-blocked
-    (CLAUDE.md §6), they only get a cost penalty (see edge_cost).
+    Codes: "stairs", "slope_over_max", "slope_needs_ramp",
+    "slope_over_max_estimated", "curb_cuts", "width". Slope limits apply to
+    surveyed slopes (slope_source == "cornell_survey") in full (§6); lidar
+    estimates (slope_source == "usgs_lidar_1m_estimate") are hard-blocked
+    only above ESTIMATED_SLOPE_HARD_PCT, and only for profiles whose own
+    max_slope_pct is at or below that threshold (CLAUDE.md §6, P4-fix2) --
+    lidar noise is a couple of points, so an estimate that far over the ADA
+    ramp limit is very likely a real barrier. Estimated slopes at or below
+    the threshold, and "unknown" slopes, are never hard-blocked; they only
+    get a cost penalty (see edge_cost).
     """
     codes: list[str] = []
 
@@ -33,11 +40,15 @@ def hard_limit_violations(attrs: dict, prefs: ResolvedPrefs) -> list[str]:
         codes.append("stairs")
 
     slope = attrs.get("slope_pct") or 0.0
-    if attrs.get("slope_source") == SLOPE_SOURCE_SURVEYED:
+    slope_source = attrs.get("slope_source")
+    if slope_source == SLOPE_SOURCE_SURVEYED:
         if slope > prefs.max_slope_pct:
             codes.append("slope_over_max")
         elif slope > prefs.ramp_required_above_pct and not attrs.get("ramp"):
             codes.append("slope_needs_ramp")
+    elif slope_source == SLOPE_SOURCE_ESTIMATE:
+        if slope > ESTIMATED_SLOPE_HARD_PCT and prefs.max_slope_pct <= ESTIMATED_SLOPE_HARD_PCT:
+            codes.append("slope_over_max_estimated")
 
     curb_cuts = attrs.get("curb_cuts")
     if prefs.require_curb_cuts and curb_cuts is not None and curb_cuts < 2:

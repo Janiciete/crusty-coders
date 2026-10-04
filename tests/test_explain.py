@@ -130,6 +130,44 @@ def test_build_violations_slope_over_max_names_ada_ramp_limit():
     assert "safe" not in msg.lower()
 
 
+def test_build_violations_slope_over_max_estimated_says_estimated():
+    """P4-fix2: an estimated (lidar) slope over ESTIMATED_SLOPE_HARD_PCT
+    (10%) must hard-block Wheelchair via the fallback rule, with a message
+    that clearly says the number is estimated, not surveyed.
+    """
+    import networkx as nx
+    from tests.conftest import make_edge
+
+    G = nx.Graph()
+    G.add_node("O4")
+    G.add_node("E_access10", access="accessible", door_id="D11", building="LidarSteepHall")
+    G.add_edge(
+        "O4",
+        "E_access10",
+        **make_edge(length_ft=40.0, slope_pct=15.4, slope_source="usgs_lidar_1m_estimate"),
+    )
+    conditions = Conditions()
+    route = find_routes(
+        G, "O4", ["E_access10"], PROFILE_PRESETS["wheelchair"], conditions, k=1
+    )[0]
+    assert route.used_fallback is True
+
+    violations = build_violations(G, route, PROFILE_PRESETS["wheelchair"])
+    msg = next(v["message"] for v in violations if v["code"] == "slope_over_max_estimated")
+    assert "15.4%" in msg
+    assert "estimated" in msg.lower()
+    assert "8.33%" in msg
+    assert "ADA ramp limit" in msg
+    assert "safe" not in msg.lower()
+
+    # The route-level explanation's max-slope line must also say "estimated"
+    # whenever the reported max slope actually came from a lidar estimate.
+    stats = compute_stats(G, route, None, PROFILE_PRESETS["wheelchair"], dark_threshold=0.0)
+    lines = build_explanation(G, route, stats, PROFILE_PRESETS["wheelchair"], None)
+    slope_line = next(line for line in lines if line.startswith("Maximum slope"))
+    assert "estimated" in slope_line.lower()
+
+
 def test_build_explanation_mentions_slope_lighting_and_destination(main_graph):
     conditions = Conditions()
     wheelchair_route = find_routes(

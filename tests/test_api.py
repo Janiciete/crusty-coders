@@ -6,16 +6,17 @@ augmented here with x/y coordinates (the fixtures intentionally have none --
 they test routing logic, not geometry) via a local `api_store` fixture, and
 wired into the FastAPI app with `app.dependency_overrides`.
 
-The one real-graph test (hero trip, all three profiles) is skipped if
-cornell_data/graph/graph_snapshot_p4.pkl is missing, and deliberately reads
-that snapshot path directly rather than GRAPH_PATH/the default graph.pkl, so
-it is unaffected by any concurrent pipeline run that may be rewriting the
-live graph.pkl.
+The one real-graph test (hero trip, all three profiles) is skipped if the
+real graph (GRAPH_PATH, defaulting to cornell_data/graph/graph.pkl) is
+missing. It runs against the final, post-lidar graph.pkl (P4-fix: previously
+pointed at the stale pre-lidar graph_snapshot_p4.pkl, which only P2's
+--elevation fill superseded).
 """
 
 from __future__ import annotations
 
 import math
+import os
 import pickle
 from pathlib import Path
 
@@ -30,7 +31,9 @@ from service.graph_store import build_store, get_store
 from service.profiles import PROFILE_PRESETS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOT_PATH = REPO_ROOT / "cornell_data" / "graph" / "graph_snapshot_p4.pkl"
+SNAPSHOT_PATH = Path(
+    os.getenv("GRAPH_PATH") or (REPO_ROOT / "cornell_data" / "graph" / "graph.pkl")
+)
 
 FAKE_SERVICE_KEY = "sk-test-super-secret-service-role-key-0123456789"
 
@@ -447,13 +450,13 @@ def test_unknown_slope_source_never_hard_blocks_but_is_penalized():
 
 
 # ---------------------------------------------------------------------------
-# One real-graph test (hero trip, all three profiles) -- skipped if the
-# snapshot isn't present. Deliberately loads SNAPSHOT_PATH directly, not
-# GRAPH_PATH / the default graph.pkl.
+# One real-graph test (hero trip, all three profiles) -- skipped if the real
+# graph isn't present. Loads GRAPH_PATH (falling back to the default
+# cornell_data/graph/graph.pkl), i.e. the final post-lidar graph.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not SNAPSHOT_PATH.exists(), reason="graph_snapshot_p4.pkl not found")
+@pytest.mark.skipif(not SNAPSHOT_PATH.exists(), reason="graph.pkl not found")
 def test_hero_trip_three_profiles_on_real_graph():
     with open(SNAPSHOT_PATH, "rb") as f:
         G = pickle.load(f)

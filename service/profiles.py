@@ -32,16 +32,44 @@ SLOPE_SOURCE_ESTIMATE = "usgs_lidar_1m_estimate"
 # modules (e.g. explain.py) can refer to it by name instead of a bare string.
 SLOPE_SOURCE_UNKNOWN = "unknown"
 
+# [DECISION] (P4-fix2) Lidar-estimated slopes are noisy (~1-2 points) but an
+# estimate this far over the ADA ramp limit is very likely a real barrier,
+# not noise. Above this threshold, an estimated-slope edge is hard-blocked
+# for any profile whose own max_slope_pct is at or below the threshold (i.e.
+# wheelchair); estimated slopes from 5% up to this threshold still only get
+# the existing heavy cost penalty (cost.py), not a hard block. Surveyed-slope
+# hard limits (SLOPE_SOURCE_SURVEYED) and "unknown" handling are unchanged.
+ESTIMATED_SLOPE_HARD_PCT = 10.0
+
 # Surface values that get an extra roughness penalty. Confirmed present in
-# the real graph: "gravel", "cobblestone", "brick" (via P4 snapshot
-# exploration of graph_snapshot_p4.pkl). The real `surface` field also
-# contains other values not in this set that arguably read as "rough" too
-# -- "dirt", "mulch", "stone", "granite", "concrete tile", "cast stone",
-# "asphalt/other", "concrete/other" -- plus "unknown" and "crosswalk". P4
-# did not add these per its constraints (may only touch the kind/slope
-# constants in this block); flagged in the P4 report for a human to decide
-# whether to broaden ROUGH_SURFACES.
-ROUGH_SURFACES = {"gravel", "cobblestone", "brick"}
+# the real final graph (cornell_data/graph/graph.pkl, post-lidar), with
+# total edge length per value: "unknown" (3729 edges / 60862.5 ft),
+# "concrete" (1511 / 59565.2), "asphalt" (445 / 26571.2), "crosswalk"
+# (146 / 4230.4), "cast stone" (70 / 1748.6), "concrete/other" (47 / 1611.7),
+# "concrete tile" (43 / 1081.9), "brick" (27 / 983.2), "tile" (16 / 770.8),
+# "stone" (26 / 443.9), "asphalt/other" (11 / 383.2), "gravel" (10 / 362.6),
+# "mulch" (2 / 194.5), "cobblestone" (4 / 148.6), "dirt" (3 / 107.1),
+# "other" (1 / 26.8), "granite" (1 / 8.5).
+#
+# [DECISION] (P4-fix) extended ROUGH_SURFACES with "dirt", "mulch", "stone",
+# "granite", and "cast stone" -- natural/unfinished surfaces that read as
+# rough underfoot/under-wheel, matching the existing gravel/cobblestone/brick
+# entries in kind. Left "concrete tile" and "asphalt" (and asphalt/other,
+# concrete/other, plain "tile", "other", "unknown", "crosswalk") unchanged:
+# asphalt and concrete tile are engineered, generally smooth walking
+# surfaces despite the name; the "/other" and bare "unknown"/"other"/"tile"
+# values are ambiguous rather than confirmed-rough, so no penalty is
+# assumed without more data.
+ROUGH_SURFACES = {
+    "gravel",
+    "cobblestone",
+    "brick",
+    "dirt",
+    "mulch",
+    "stone",
+    "granite",
+    "cast stone",
+}
 
 # Preference keys a caller may override via POST /route "preferences" (CLAUDE.md
 # §5). walking_speed_ftps and the internal-only fields below are NOT

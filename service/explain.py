@@ -15,7 +15,7 @@ them as fact.
 
 from __future__ import annotations
 
-from service.profiles import ResolvedPrefs, PROFILE_PRESETS, SLOPE_SOURCE_ESTIMATE
+from service.profiles import PROFILE_PRESETS, ResolvedPrefs, SLOPE_SOURCE_ESTIMATE
 
 _FASTEST_SPEED_FTPS = PROFILE_PRESETS["fastest"].walking_speed_ftps
 
@@ -192,6 +192,13 @@ def _violation_message(data: dict, code: str, prefs: ResolvedPrefs, edge_id: str
         return (
             f"segment {edge_id}: {slope_txt} slope with no ramp marked, exceeds the "
             f"{prefs.ramp_required_above_pct:.1f}% threshold above which ADA requires a ramp"
+        )
+    if code == "slope_over_max_estimated":
+        label = _slope_limit_label(prefs.max_slope_pct)
+        slope_txt = f"{slope:.1f}%" if slope is not None else "unmeasured"
+        return (
+            f"segment {edge_id}: {slope_txt} slope (estimated from lidar), exceeds the "
+            f"{prefs.max_slope_pct:.2f}% {label}"
         )
     if code == "curb_cuts":
         cc = data.get("curb_cuts")
