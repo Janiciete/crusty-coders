@@ -81,11 +81,19 @@ def test_health_shape(client, api_store):
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
+    # supabase_configured reflects whatever SUPABASE_* env vars are actually
+    # set (see service/app.py:health) -- not hardcoded, since this flips to
+    # True once a live project is configured in .env (post P5-fix).
+    expected_supabase_configured = bool(
+        os.getenv("SUPABASE_URL")
+        and os.getenv("SUPABASE_ANON_KEY")
+        and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    )
     assert body == {
         "graph_loaded": True,
         "nodes": api_store.graph.number_of_nodes(),
         "edges": api_store.graph.number_of_edges(),
-        "supabase_configured": False,
+        "supabase_configured": expected_supabase_configured,
     }
 
 
