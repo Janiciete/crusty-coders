@@ -82,6 +82,15 @@ def test_avoid_steep_essential_sets_hard_slope_and_ramp_limits():
     assert prefs.penalty_scale.get("slope", 1.0) == 1.0
 
 
+def test_avoid_steep_essential_also_applies_wheelchair_width_and_cross_slope():
+    # F3 Task 0: read dynamically from PROFILE_PRESETS["wheelchair"], not
+    # hardcoded, so this stays correct if the preset's own values change.
+    prefs = resolve_preferences([], None, [], {"avoid_steep": "essential"})
+    wheelchair = PROFILE_PRESETS["wheelchair"]
+    assert prefs.min_width_ft == wheelchair.min_width_ft
+    assert prefs.max_cross_slope_pct == wheelchair.max_cross_slope_pct
+
+
 @pytest.mark.parametrize("level,expected_scale", [("important", 3.0), ("nice", 1.5)])
 def test_avoid_steep_soft_levels_scale_slope_cost(level, expected_scale):
     prefs = resolve_preferences([], None, [], {"avoid_steep": level})
@@ -212,6 +221,8 @@ def test_wheelchair_equivalent_priority_combo_matches_or_exceeds_wheelchair_pres
     assert prefs.max_slope_pct <= wheelchair.max_slope_pct
     assert prefs.require_curb_cuts == wheelchair.require_curb_cuts
     assert prefs.require_accessible_entrance == wheelchair.require_accessible_entrance
+    assert prefs.min_width_ft == wheelchair.min_width_ft  # F3 Task 0
+    assert prefs.max_cross_slope_pct == wheelchair.max_cross_slope_pct  # F3 Task 0
 
     priority_route = find_routes(
         main_graph, "O", ["E_access"], prefs, NO_CONDITIONS, edge_effects={}, k=1

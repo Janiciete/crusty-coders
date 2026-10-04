@@ -354,8 +354,19 @@ def resolve_preferences(
                 result.penalty_scale["stairs"] = _PRIORITY_SCALE_BY_LEVEL[level]
         elif chip_id == "avoid_steep":
             if level == "essential":
+                wheelchair = PROFILE_PRESETS["wheelchair"]
                 result.max_slope_pct = min(result.max_slope_pct, 8.33)
                 result.ramp_required_above_pct = min(result.ramp_required_above_pct, 5.0)
+                # F3 (Task 0): also apply the wheelchair preset's clear-width
+                # hard limit and cross-slope figure, read from the preset
+                # rather than hardcoded, so "avoid steep slopes" implies the
+                # same minimum passable width a wheelchair profile requires.
+                # (min_width_ft is cost.py's only actual hard limit of the
+                # two; max_cross_slope_pct has no hard-limit check anywhere
+                # in cost.py today -- it only affects explanation/stat
+                # wording, same as it does for the real wheelchair profile.)
+                result.min_width_ft = max(result.min_width_ft, wheelchair.min_width_ft)
+                result.max_cross_slope_pct = min(result.max_cross_slope_pct, wheelchair.max_cross_slope_pct)
             else:
                 result.penalty_scale["slope"] = _PRIORITY_SCALE_BY_LEVEL[level]
         elif chip_id == "curb_cuts":

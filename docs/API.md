@@ -48,7 +48,7 @@ F1 (P13-lite): the UI's five preference chips, each with an importance level. `"
 | Chip id | Essential | Important | Nice |
 |---|---|---|---|
 | `avoid_stairs` | `avoid_stairs = true` (hard) | stair cost ×3 | stair cost ×1.5 |
-| `avoid_steep` | `max_slope_pct = 8.33`, `ramp_required_above_pct = 5.0` (hard; the estimated-slope guard, CLAUDE.md §6/P4-fix2, still applies) | slope penalty ×3 | slope penalty ×1.5 |
+| `avoid_steep` | `max_slope_pct = 8.33`, `ramp_required_above_pct = 5.0` (hard; the estimated-slope guard, CLAUDE.md §6/P4-fix2, still applies), plus `min_width_ft`/`max_cross_slope_pct` taken from the `wheelchair` preset (F3 Task 0) -- `min_width_ft` is a real hard limit; `max_cross_slope_pct` has no hard-limit check anywhere today (same as the `wheelchair` profile itself), so it only affects explanation/stat wording | slope penalty ×3 | slope penalty ×1.5 |
 | `curb_cuts` | `require_curb_cuts = true` (hard) | curb-cut penalty ×3 | curb-cut penalty ×1.5 |
 | `accessible_entrance` | `require_accessible_entrance = true` (hard) | no routing-cost effect -- destination entrances are already preferred accessible-first by default | same as important |
 | `well_lit` | `prefer_lit = true` + lighting penalty ×5. Can't be a true hard limit (there's no per-edge "is lit" cutoff), so the response's top-level `warnings` includes a note explaining this whenever `well_lit` is `"essential"`. | `prefer_lit = true` + lighting penalty ×3 | `prefer_lit = true` + lighting penalty ×1.5 |
