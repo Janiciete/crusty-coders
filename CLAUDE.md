@@ -30,7 +30,8 @@ service/               FastAPI app: app.py profiles.py cost.py router.py explain
 supabase/migrations/   SQL: extensions, tables, RLS policies, triggers, Realtime publication
 scripts/               one-off tools: load seed reports, run bottleneck finder, GPS replay
 tests/                 pytest; unit tests use a tiny hand-built fixture graph, not graph.pkl
-docs/                  project_plan.md, API.md (UI contract), devpost.md
+docs/                  project_plan.md, API.md (UI contract), devpost.md, UI.md
+web/                   static UI (no build step): index.html, styles.css, app.js, config.example.js (config.js gitignored)
 ```
 
 ## 4. Run commands (from repo root)
@@ -111,7 +112,7 @@ Other endpoints: `GET /health`, `GET /profiles` (defaults), `GET /conditions`, `
 ## 8. Working rules for Claude Code
 1. Read this file and every file you will touch before editing.
 2. For multi-file or risky changes, propose a plan and wait for approval.
-3. Edit only the files the current prompt allows. Never touch frontend code.
+3. Edit only the files the current prompt allows. Never touch frontend code except in `web/` when the prompt is P14a or P14b.
 4. Never modify files in `cornell_data/` except outputs written by the pipeline scripts.
 5. Add any new dependency to requirements.txt (pinned) and name it in your report.
 6. Write pytest tests for logic; run `pytest -q` before reporting.
@@ -128,6 +129,7 @@ Other endpoints: `GET /health`, `GET /profiles` (defaults), `GET /conditions`, `
 - [x] P5 Supabase schema, RLS, triggers, Realtime — Must (migrations applied to live project; integration tests 7/7 passing)
 - [x] P6 Live reports in routing + seed report loader — Must (seed: Should) — implemented; migration 0005 (trip_hazard type) not yet pasted into the live project, so the seed loader can't run live yet (human checkpoint pending)
 - [x] P7 Weather and darkness conditions — Should
+- [x] P14a Way2Go UI core screens — Must (built without a live backend on this machine; see docs/UI.md Known gap)
 - [ ] P8 Bottleneck finder — Should
 - [ ] P9 xAI natural-language preferences — Stretch, dropped (2-person team)
 - [ ] P10 GPS replay trace for slowdown demo — Stretch, dropped (2-person team)
